@@ -268,7 +268,7 @@ public class DicomScpServer {
         List<String> rows = store.getCsvRowsSnapshot();
         for (int row = 1; row < rows.size(); row++) {
             String[] f = RisDataStore.parseCsvLineToEntry(rows.get(row));
-            String patientName = f[0], patientID = f[1], dob = f[2], procDesc = f[6];
+            String patientName = f[0], patientID = f[1], dob = f[2], sex = f[3], procDesc = f[6];
             String accNum = f[8], procID = f[9], aeTitle = f[11], spsDate = f[12];
             String spsTime = f[13], spsDesc = f[15], spsID = f[16], status = f[19];
             String modality = f[20], refPhys = f[21], protoCode = f[23];
@@ -322,6 +322,7 @@ public class DicomScpServer {
             if (!isFieldOmitted(0x0010, 0x0010)) dicomAddStr(data, 0x0010, 0x0010, patientName);
             if (!isFieldOmitted(0x0010, 0x0020)) dicomAddStr(data, 0x0010, 0x0020, patientID);
             if (!isFieldOmitted(0x0010, 0x0030)) dicomAddStr(data, 0x0010, 0x0030, dob);
+            if (!isFieldOmitted(0x0010, 0x0040)) dicomAddStr(data, 0x0010, 0x0040, sex);
             if (!isFieldOmitted(0x0020, 0x000D)) dicomAddStr(data, 0x0020, 0x000D, studyUID);
             if (!isFieldOmitted(0x0032, 0x1060)) dicomAddStr(data, 0x0032, 0x1060, procDesc);
 

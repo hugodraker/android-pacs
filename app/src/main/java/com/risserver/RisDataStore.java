@@ -12,6 +12,7 @@ package com.hugo.risserver;
 
 import android.content.Context;
 import java.io.BufferedReader;
+import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
@@ -37,6 +38,10 @@ public class RisDataStore {
             "ProcID,Priority,StationAE,StartDate,StartTime,PerfPhys,SPSDesc,SPSID,StationName," +
             "Location,Status,Modality,RefPhys,StudyDesc,ProtoCode,ProtoScheme,ProtoMeaning,StudyUID";
 
+    // ===== C-STORE TRACKING CONSTANTS =====
+    public static final int MAX_FILES_PER_FOLDER = 10_000_000; // I0000000..I9999999
+    public static final String CSTORE_CSV_NAME = "c-store.csv";
+
     public interface LogListener {
         void onLogUpdated(String fullLog);
         void onStatusChanged();
@@ -49,12 +54,26 @@ public class RisDataStore {
         public String name = "";
     }
 
+    public static class StoredImageInfo {
+        public String accession = "";
+        public String patientName = "";
+        public String patientID = "";
+        public String studyUID = "";
+        public String sopInstanceUID = "";
+        public String folder = "";
+        public String filename = "";
+        public String modality = "";
+        public long fileSize = 0;
+        public String timestamp = "";
+    }
+
     public File dataDir;
     public File iniFile;
     public File logFile;
+    public File cStoreFile;
 
     // Server Configuration (Ports default to unprivileged 2323/8080/1104 if 23/80/104 fail on Android)
-    public String aeCalled = "AUTOIT_SCP";
+    public String aeCalled = "PACS";
     public int telnetPort = 2323;
     public int httpPort = 8080;
     public int dicomPort = 1104;
@@ -63,11 +82,17 @@ public class RisDataStore {
     public String delPwd = "0";
     public String omittedFields = "0";
 
+    // DICOM Storage Configuration
+    public String storageRootName = "dicomstore";
+    public String storageFolder = "D0000000";
+    public int storageIndex = 0;
+
     // In-memory CSV Worklist Store
     private final List<String> csvData = new ArrayList<>();
     private boolean csvInitialized = false;
 
     // Procedure Codes Store
+    private final Map<String, Integer> accessionImageCount = new HashMap<>();
     public final List<ProcCodeEntry> procCodes = new ArrayList<>();
     public boolean procCodesLoaded = false;
 
@@ -90,11 +115,13 @@ public class RisDataStore {
 
         iniFile = new File(dataDir, "RIS_SERVER.ini");
         logFile = new File(dataDir, "ris_server.log");
+        cStoreFile = new File(dataDir, CSTORE_CSV_NAME);
 
         loadConfig();
         ensureCsvInitialized();
         resetWorklistToHeader();
         loadProcedureCodes();
+        loadCStoreTracking();
     }
 
     public void setLogListener(LogListener listener) {
@@ -136,7 +163,7 @@ public class RisDataStore {
 
     // ===== INI Configuration =====
     public void setAeTitle(String src) {
-        if (src == null || src.trim().isEmpty()) src = "AUTOIT_SCP";
+        if (src == null || src.trim().isEmpty()) src = "PACS";
         aeCalled = src.trim();
         if (aeCalled.length() > 31) aeCalled = aeCalled.substring(0, 31);
     }
@@ -157,7 +184,7 @@ public class RisDataStore {
                     map.put(k, v);
                 }
             }
-            setAeTitle(map.getOrDefault("aetitle", "AUTOIT_SCP"));
+            setAeTitle(map.getOrDefault("aetitle", "PACS"));
             delPwd = map.getOrDefault("deletepassword", "0").trim();
             omittedFields = map.getOrDefault("omittedfields", "0").trim();
             telnetPort = parseIntSafe(map.get("telnetport"), 2323);
@@ -165,6 +192,13 @@ public class RisDataStore {
             dicomPort = parseIntSafe(map.get("dicomport"), 1104);
             telnetTimeout = parseIntSafe(map.get("telnettimeout"), 10);
             debugLog = parseIntSafe(map.get("debuglog"), 1);
+            
+            // Storage config
+            storageRootName = map.getOrDefault("storageroot", "dicomstore").trim();
+            storageFolder = map.getOrDefault("storagefolder", "D0000000").trim();
+            storageIndex = parseIntSafe(map.get("storageindex"), 0);
+            if (!storageFolder.matches("D\\d{7}")) storageFolder = "D0000000";
+            if (storageIndex < 0 || storageIndex > MAX_FILES_PER_FOLDER) storageIndex = 0;
         } catch (Exception e) {
             writeLog("Failed to read INI: " + e.getMessage());
         }
@@ -179,7 +213,10 @@ public class RisDataStore {
                 "HttpPort=" + httpPort + "\r\n" +
                 "DicomPort=" + dicomPort + "\r\n" +
                 "TelnetTimeout=" + telnetTimeout + "\r\n" +
-                "DebugLog=" + debugLog + "\r\n";
+                "DebugLog=" + debugLog + "\r\n" +
+                "StorageRoot=" + storageRootName + "\r\n" +
+                "StorageFolder=" + storageFolder + "\r\n" +
+                "StorageIndex=" + storageIndex + "\r\n";
         try (FileOutputStream fos = new FileOutputStream(iniFile)) {
             fos.write(ini.getBytes(StandardCharsets.UTF_8));
         } catch (Exception e) {
@@ -345,6 +382,158 @@ public class RisDataStore {
                 break;
             }
         }
+    }
+
+    // ===== C-STORE Tracking CSV =====
+    
+    /** Initialize/clear the c-store tracking CSV */
+    public synchronized void loadCStoreTracking() {
+        if (cStoreFile.exists()) {
+            cStoreFile.delete();
+        }
+        writeCStoreEntry("Accession", "PatientName", "PatientID", "StudyUID", "SOPInstanceUID", 
+                        "Folder", "Filename", "Modality", "FileSize", "Timestamp");
+    }
+
+    /** Append an entry to the c-store CSV */
+    public synchronized boolean writeCStoreEntry(String... values) {
+        if (values == null || values.length == 0) return false;
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < values.length; i++) {
+            if (i > 0) sb.append(',');
+            String v = values[i] == null ? "" : values[i];
+            boolean q = v.contains(",") || v.contains("\"");
+            if (q) sb.append('"');
+            for (int j = 0; j < v.length(); j++) {
+                char c = v.charAt(j);
+                if (q && c == '"') sb.append('"');
+                sb.append(c);
+            }
+            if (q) sb.append('"');
+        }
+        
+        try (FileWriter fw = new FileWriter(cStoreFile, true)) {
+            fw.write(sb.toString() + "\n");
+        } catch (Exception e) {
+            writeLog("Failed to write c-store tracking: " + e.getMessage());
+            return false;
+        }
+        return true;
+    }
+
+    /** Record a successfully stored image */
+    public synchronized boolean recordStoredImage(String accession, String patientName, String patientID,
+                                                  String studyUID, String sopInstanceUID,
+                                                  String folder, String filename, 
+                                                  String modality, long fileSize, String timestamp) {
+        return writeCStoreEntry(accession, patientName, patientID, studyUID, sopInstanceUID,
+                               folder, filename, modality, String.valueOf(fileSize), timestamp);
+    }
+
+    /** Get list of all stored images for a given accession */
+    public synchronized List<StoredImageInfo> getStoredImagesForAccession(String accession) {
+        List<StoredImageInfo> result = new ArrayList<>();
+        if (!cStoreFile.exists()) return result;
+        
+        try (BufferedReader br = new BufferedReader(new FileReader(cStoreFile))) {
+            String line = br.readLine(); // skip header
+            if (line == null) return result;
+            
+            while ((line = br.readLine()) != null) {
+                String[] vals = parseCsvLineToEntry(line);
+                if (vals.length < 9) continue;
+                if (accession.trim().isEmpty() || vals[0].trim().equalsIgnoreCase(accession.trim())) {
+                    StoredImageInfo info = new StoredImageInfo();
+                    info.accession = vals[0];
+                    info.patientName = vals[1];
+                    info.patientID = vals[2];
+                    info.studyUID = vals[3];
+                    info.sopInstanceUID = vals[4];
+                    info.folder = vals[5];
+                    info.filename = vals[6];
+                    info.modality = vals[7];
+                    try { info.fileSize = Long.parseLong(vals[8]); } catch (Exception ignored) {}
+                    info.timestamp = vals.length > 9 ? vals[9] : "";
+                    result.add(info);
+                }
+            }
+        } catch (Exception e) {
+            writeLog("Failed to read c-store tracking: " + e.getMessage());
+        }
+        return result;
+    }
+
+    /** Get image count for an accession (cached in memory, refreshed from CSV) */
+    public synchronized int getImageCountForAccession(String accession) {
+        if (accession == null || accession.trim().isEmpty()) return 0;
+        
+        // Refresh cache from CSV
+        List<StoredImageInfo> imgs = getStoredImagesForAccession(accession);
+        int count = imgs.size();
+        
+        // Update in-memory cache
+        accessionImageCount.put(accession.trim(), count);
+        return count;
+    }
+
+    /** Get total image count across all worklist entries */
+    public synchronized int getTotalImageCount() {
+        int total = 0;
+        List<String> rows = getCsvRowsSnapshot();
+        for (int i = 1; i < rows.size(); i++) {
+            String[] f = parseCsvLineToEntry(rows.get(i));
+            String acc = f.length > 8 ? f[8] : "";
+            total += getImageCountForAccession(acc);
+        }
+        return total;
+    }
+
+    /** Get file path for an image by SOP instance UID */
+    public synchronized File getImageFilePath(String sopInstanceUID) {
+        List<StoredImageInfo> all = getAllStoredImages();
+        for (StoredImageInfo info : all) {
+            if (info.sopInstanceUID != null && info.sopInstanceUID.equals(sopInstanceUID)) {
+                return new File(getStorageRoot(), info.folder + "/" + info.filename);
+            }
+        }
+        return null;
+    }
+
+    /** Get ALL stored images (for admin view) */
+    public synchronized List<StoredImageInfo> getAllStoredImages() {
+        return getStoredImagesForAccession("");
+    }
+
+    // ===== DICOM Storage Path Allocation =====
+
+    public File getStorageRoot() {
+        File root = new File(dataDir, storageRootName);
+        if (!root.exists()) root.mkdirs();
+        return root;
+    }
+
+    /** Returns the next free image file, rolling D0000000 -> D0000001 at I9999999. */
+    public synchronized File allocateImageFile() {
+        if (storageIndex >= MAX_FILES_PER_FOLDER) {
+            int n = 0;
+            try { n = Integer.parseInt(storageFolder.substring(1)); } catch (Exception ignored) {}
+            storageFolder = String.format(Locale.US, "D%07d", n + 1);
+            storageIndex = 0;
+            writeLog("Storage folder rolled over to " + storageFolder);
+            saveConfig();
+        }
+        File dir = new File(getStorageRoot(), storageFolder);
+        if (!dir.exists()) dir.mkdirs();
+        File f = new File(dir, String.format(Locale.US, "I%07d", storageIndex));
+        storageIndex++;
+        saveConfig();
+        return f;
+    }
+
+    /** Get absolute URL-safe path for an image (relative to web root) */
+    public String getImageUrl(String folder, String filename) {
+        // Returns path suitable for HTTP requests
+        return "/images/" + storageRootName + "/" + folder + "/" + filename;
     }
 
     // ===== Procedure Codes (procedurecodes.csv) =====
