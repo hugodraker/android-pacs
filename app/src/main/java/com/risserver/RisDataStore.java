@@ -275,7 +275,7 @@ public class TelnetHttpServer {
                 new Thread(() -> handleHttpClient(client), "HttpClientWorker").start();
             }
         } catch (IOException e) {
-            if (running) store.writeLog("ERROR: Failed to listen on HTTP port " + store.httpPort)
+            if (running) store.writeLog("ERROR: Failed to listen on HTTP port " + store.httpPort);
         } catch (IOException e) {
             if (running) store.writeLog("ERROR: Failed to listen on HTTP port " + store.httpPort);
         }
