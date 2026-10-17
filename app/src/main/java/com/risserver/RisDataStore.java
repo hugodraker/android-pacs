@@ -142,7 +142,7 @@ public RisDataStore(Context context) {
   //  dataDir = new File(publicDir, "RisServerData");
 
   //  if (!dataDir.exists()) {
-        dataDir.mkdirs();
+  //      dataDir.mkdirs();
   //  }
 
   //  iniFile = new File(dataDir, "RIS_SERVER.ini");
