@@ -30,8 +30,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
-public class TelnetHttpServer {
-    private final RisDataStore store;
+public class TelnetHttpServer {private final RisDataStore store;
     private ServerSocket telnetServerSocket;
     private ServerSocket httpServerSocket;
     private volatile boolean running = false;
@@ -724,10 +723,10 @@ public class TelnetHttpServer {
 
         sb.append("<div style='display:flex; flex-wrap:wrap; gap:20px; margin-bottom:15px;'>" +
                   "<div>" +
-                  "<input type='text' id='patientFilter' oninput='filterPatients()' placeholder='Filter patients...' style='width: 300px; display: block; margin-bottom: 5px; padding: 5px;'>" +
+                  "<input type='text' id='patientFilter' oninput='filterPatients()' placeholder='Filter patients...' autocomplete='off' style='width: 300px; display: block; margin-bottom: 5px; padding: 5px;'>" +
                   "<select id='patientSel' size='5' onchange='loadPatientDetails(this.value)' style='width: 300px; vertical-align:top;'></select></div>" +
                   "<div>" +
-                  "<input type='text' id='procFilter' onkeyup='filterProcCodes()' placeholder='Filter procedure codes...' style='width: 300px; display: block; margin-bottom: 5px; padding: 5px;'>" +
+                  "<input type='text' id='procFilter' onkeyup='filterProcCodes()' placeholder='Filter procedure codes...' autocomplete='off' style='width: 300px; display: block; margin-bottom: 5px; padding: 5px;'>" +
                   "<select id='procCodeSel' multiple size='5' onchange=\"loadProcCode()\" style='width: 300px; vertical-align:top; margin-bottom: 15px;'>");
 
         if (store.procCodesLoaded) {
@@ -802,11 +801,11 @@ public class TelnetHttpServer {
             sb.append("<script>function updLoc(val) {}</script>");
         }
 
-        sb.append("<input type='text' name='StationName' list='stNameList' placeholder='Station Name'> ");
-        sb.append("<input type='text' name='Location' list='roomList' oninput='updLoc(this.value)' onchange='updLoc(this.value)' placeholder='Location'> ");
+        sb.append("<input type='text' name='StationName' list='stNameList' placeholder='Station Name' autocomplete='off'> ");
+        sb.append("<input type='text' name='Location' list='roomList' oninput='updLoc(this.value)' onchange='updLoc(this.value)' placeholder='Location' autocomplete='off'> ");
         
         sb.append(" <select name='Status'><option value='0'>NONE</option><option value='1' selected>SCHEDULED</option><option value='2'>ARRIVED</option><option value='3'>READY</option><option value='4'>STARTED</option><option value='5'>DEPARTED</option></select><br>");
-        sb.append("<input type='text' name='Modality' list='modList' placeholder='Modality'> ");
+        sb.append("<input type='text' name='Modality' list='modList' placeholder='Modality' autocomplete='off'> ");
         
         sb.append("<input type='text' name='RefPhys' placeholder='Ref Phys'> <input type='text' name='StudyDesc' placeholder='Study Desc'><br>" +
             "<input type='text' name='ProtoCode' placeholder='Proto Code'> <input type='text' name='ProtoScheme' placeholder='Proto Scheme'> <input type='text' name='ProtoMeaning' placeholder='Proto Meaning'><br>" +
@@ -821,8 +820,7 @@ public class TelnetHttpServer {
         sb.append(HTML_END);
         return sb.toString();
     }
-
-    private void sendHttpResponse(OutputStream out, String status, String contentType, String body) throws IOException {
+private void sendHttpResponse(OutputStream out, String status, String contentType, String body) throws IOException {
         byte[] bodyBytes = body.getBytes(StandardCharsets.UTF_8);
         String hdr = "HTTP/1.1 " + status + "\r\n" +
                      "Content-Type: " + contentType + "\r\n" +

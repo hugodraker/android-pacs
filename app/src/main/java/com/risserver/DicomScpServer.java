@@ -30,8 +30,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
-public class DicomScpServer {
-    private final RisDataStore store;
+public class DicomScpServer {private final RisDataStore store;
     private ServerSocket serverSocket;
     private volatile boolean running = false;
 
@@ -419,14 +418,24 @@ public class DicomScpServer {
 
         boolean isUnlinked = accNum.isEmpty();
         String effectiveAcc = accNum;
-        String effectivePatName = patName;
-        String effectivePatId = patId;
 
         if (isUnlinked) {
-            effectiveAcc = RisDataStore.UNLINKED_ACCESSION;
-            effectivePatName = RisDataStore.UNLINKED_PATIENT_NAME;
-            effectivePatId = RisDataStore.UNLINKED_PATIENT_ID;
-            store.writeLog("C-STORE: no accession, filing under Unlinked Images");
+            effectiveAcc = store.generateNextUnlinkedAccession();
+            store.writeLog("C-STORE: no accession, generated " + effectiveAcc);
+            
+            // Only change the header on upload if the accession is missing
+            patchTagInPlace(ds, 0x0008, 0x0050, effectiveAcc);
+
+            // Add basic row to worklist so the image isn't orphaned in the UI
+            String[] newEntry = new String[RisDataStore.FIELD_COUNT];
+            Arrays.fill(newEntry, "");
+            newEntry[0] = patName.isEmpty() ? "Unknown Patient" : patName;
+            newEntry[1] = patId.isEmpty() ? "UNKNOWN" : patId;
+            newEntry[8] = effectiveAcc;
+            newEntry[19] = "5"; // DEPARTED
+            newEntry[20] = modality;
+            newEntry[22] = "Unlinked Image Received";
+            store.normalizeAndUpsertEntry(newEntry);
         }
 
         int status = 0x0000;
@@ -445,18 +454,17 @@ public class DicomScpServer {
                 filename = dest.getName();
             }
 
-            // Write exactly as received (raw byte network stream, no prepended header to avoid corruption)
-            try (java.io.FileOutputStream fos = new java.io.FileOutputStream(dest)) {
+            try (FileOutputStream fos = new FileOutputStream(dest)) {
                 fos.write(ds);
             }
 
             java.text.SimpleDateFormat tsFmt = new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US);
-            store.recordStoredImage(effectiveAcc, effectivePatName, effectivePatId, studyUid, sopInstUid,
+            store.recordStoredImage(effectiveAcc, patName, patId, studyUid, sopInstUid,
                                    folder, filename, modality, dest.length(), tsFmt.format(new Date()));
 
             store.getImageCountForAccession(effectiveAcc);
             store.writeLog("C-STORE OK -> " + folder + "/" + filename + " (" + ds.length + " B) mod=" + modality +
-                          " pid=" + patId + " acc=" + effectiveAcc + (isUnlinked ? " [UNLINKED]" : ""));
+                          " pid=" + patId + " acc=" + effectiveAcc);
         } catch (Exception ex) {
             status = 0xA700;
             store.writeLog("C-STORE FAILED: " + ex.getMessage());
@@ -473,8 +481,7 @@ public class DicomScpServer {
 
         sendPDataTf(out, pcId, 0x03, patchGroupLength(cmd.toByteArray()));
     }
-
-    /* 
+/* 
      * ========================================================================
      * COMMENTED OUT: Header rewrites are disabled so images are stored
      * exactly as received via network streams. 

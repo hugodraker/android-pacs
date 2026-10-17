@@ -27,8 +27,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Random;
 
-public class RisDataStore {
-    public static final int FIELD_COUNT = 27;
+public class RisDataStore {public static final int FIELD_COUNT = 27;
     public static final int MAX_CSV_ROWS = 16384;
     public static final int MAX_PROC_CODES = 256;
 
@@ -108,7 +107,23 @@ public class RisDataStore {
     private LogListener logListener;
     private final Random random = new Random();
 
-    public RisDataStore(Context context) {
+    public synchronized String generateNextUnlinkedAccession() {
+        int max = 0;
+        for (int i = 1; i < csvData.size(); i++) {
+            String[] f = parseCsvLineToEntry(csvData.get(i));
+            String acc = f[8];
+            if (acc != null && acc.toUpperCase(Locale.US).startsWith("UNLINKED")) {
+                try {
+                    int val = Integer.parseInt(acc.substring(8));
+                    if (val > max) max = val;
+                } catch (Exception ignored) {}
+            }
+        }
+        return String.format(Locale.US, "UNLINKED%06d", max + 1);
+    }
+
+    
+public RisDataStore(Context context) {
         dataDir = context.getExternalFilesDir(null);
         if (dataDir == null) {
             dataDir = context.getFilesDir();
@@ -346,11 +361,11 @@ public class RisDataStore {
     public synchronized void resetWorklistToHeader() {
         csvData.clear();
         csvData.add(CSV_HEADER);
-        ensureUnlinkedPatientExists();
         notifyStatusChanged();
     }
 
-    private void deleteRecursively(File f) {
+    
+private void deleteRecursively(File f) {
         if (f != null && f.exists()) {
             if (f.isDirectory()) {
                 File[] children = f.listFiles();
@@ -389,19 +404,19 @@ public class RisDataStore {
 
         csvData.clear();
         csvData.add(CSV_HEADER);
-        accessionImageCount.clear(); // Ensure tracking is fully cleared
-        ensureUnlinkedPatientExists();
+        accessionImageCount.clear(); 
         
         procCodes.clear();
         procCodesLoaded = false;
         patientsCsvData = null;
         
-        loadCStoreTracking(); // Recreate blank c-store
+        loadCStoreTracking(); 
         writeLog("All CSV files and image data deleted by user.");
         notifyStatusChanged();
     }
 
-    public synchronized List<String> getCsvRowsSnapshot() {
+    
+public synchronized List<String> getCsvRowsSnapshot() {
         ensureCsvInitialized();
         return new ArrayList<>(csvData);
     }
@@ -411,51 +426,11 @@ public class RisDataStore {
     }
 
     public synchronized void ensureUnlinkedPatientExists() {
-        ensureCsvInitialized();
-
-        for (int i = 1; i < csvData.size(); i++) {
-            String[] existing = parseCsvLineToEntry(csvData.get(i));
-            if (UNLINKED_PATIENT_NAME.equals(existing[0])
-                    && UNLINKED_PATIENT_ID.equals(existing[1])) {
-                return;
-            }
-        }
-
-        String[] entry = new String[FIELD_COUNT];
-        entry[0] = UNLINKED_PATIENT_NAME;                 
-        entry[1] = UNLINKED_PATIENT_ID;                   
-        entry[2] = "";                                    
-        entry[3] = "";                                    
-        entry[4] = "";                                    
-        entry[5] = "";                                    
-        entry[6] = "";                                    
-        entry[7] = "";                                    
-        entry[8] = UNLINKED_ACCESSION;                    
-        entry[9] = "";                                    
-        entry[10] = "LOW";                                
-        entry[11] = aeCalled;                             
-        entry[12] = formatDate8(new Date());              
-        entry[13] = "000000";                             
-        entry[14] = "";                                   
-        entry[15] = "Studies received without accession";  
-        entry[16] = UNLINKED_PATIENT_ID;                  
-        entry[17] = "";                                   
-        entry[18] = "";                                   
-        entry[19] = "5";                                  
-        entry[20] = "";                                   
-        entry[21] = "";                                   
-        entry[22] = "No Accession Number";                
-        entry[23] = "";                                   
-        entry[24] = "";                                   
-        entry[25] = "";                                   
-        entry[26] = "1.2.840.113619.2.1.UNLINKED";        
-
-        csvData.add(buildCsvLineFromEntry(entry));
-        writeLog("Created 'Unlinked Images' worklist row (DEPARTED)");
-        notifyStatusChanged();
+        // Obsolete: Unlinked images are now handled dynamically on a per-image basis.
     }
 
-    private String formatDate8(Date d) {
+    
+private String formatDate8(Date d) {
         SimpleDateFormat sdf = new SimpleDateFormat("yyyyMMdd", Locale.US);
         return sdf.format(d);
     }
@@ -474,11 +449,8 @@ public class RisDataStore {
 
         String acc = entry[8];
         if (acc == null || acc.trim().isEmpty()) {
-            entry[8] = UNLINKED_ACCESSION;
-            entry[0] = UNLINKED_PATIENT_NAME;
-            entry[1] = UNLINKED_PATIENT_ID;
-            entry[22] = "No Accession Number";
-            writeLog("Empty accession -> filed under Unlinked Images");
+            entry[8] = generateNextUnlinkedAccession();
+            writeLog("Empty accession -> generated " + entry[8]);
         }
 
         if (entry[26] == null || entry[26].isEmpty()) {
@@ -505,15 +477,9 @@ public class RisDataStore {
         notifyStatusChanged();
         return found;
     }
-
-    public synchronized void deletePatientByAccession(String acc) {
+public synchronized void deletePatientByAccession(String acc) {
         if (acc == null || acc.trim().isEmpty()) return;
         acc = acc.trim();
-
-        if (isUnlinkedAccession(acc)) {
-            writeLog("Refused deletion of Unlinked Images row");
-            return;
-        }
 
         for (int i = 1; i < csvData.size(); i++) {
             String[] existing = parseCsvLineToEntry(csvData.get(i));
@@ -525,7 +491,8 @@ public class RisDataStore {
         }
     }
 
-    public synchronized void loadCStoreTracking() {
+    
+public synchronized void loadCStoreTracking() {
         if (!cStoreFile.exists() || cStoreFile.length() == 0) {
             writeCStoreEntry("Accession", "PatientName", "PatientID", "StudyUID", "SOPInstanceUID",
                              "Folder", "Filename", "Modality", "FileSize", "Timestamp");
