@@ -405,10 +405,6 @@ public class DicomScpServer {
         sendPDataTf(out, pcId, 0x03, patchGroupLength(endCmd.toByteArray()));
     }
 
-    /**
-     * Handle C-STORE-RQ — receives and saves DICOM images
-     * Falls back to Unlinked Patient when accession is missing/empty
-     */
     private void handleCStoreRq(OutputStream out, int pcId, int msgId, byte[] ds) throws IOException {
         Map<Integer, String> el = new HashMap<>();
         walkElements(ds, 0, ds.length, false, el, 0);
@@ -421,14 +417,12 @@ public class DicomScpServer {
         String studyUid = el.getOrDefault(0x0020000D, "");
         String accNum = el.getOrDefault(0x00080050, "").trim();
 
-        // Check if accession is empty/null/whitespace
         boolean isUnlinked = accNum.isEmpty();
         String effectiveAcc = accNum;
         String effectivePatName = patName;
         String effectivePatId = patId;
 
         if (isUnlinked) {
-            // File under the shared Unlinked Images bucket for the HTTP UI
             effectiveAcc = RisDataStore.UNLINKED_ACCESSION;
             effectivePatName = RisDataStore.UNLINKED_PATIENT_NAME;
             effectivePatId = RisDataStore.UNLINKED_PATIENT_ID;
@@ -451,7 +445,7 @@ public class DicomScpServer {
                 filename = dest.getName();
             }
 
-            // Write exactly as received (raw byte network stream, no prepended header)
+            // Write exactly as received (raw byte network stream, no prepended header to avoid corruption)
             try (java.io.FileOutputStream fos = new java.io.FileOutputStream(dest)) {
                 fos.write(ds);
             }
@@ -724,6 +718,27 @@ public class DicomScpServer {
         out.flush();
     }
 
+    private void dicomSeqHdr(ByteArrayOutputStream out, int g, int e) {
+        out.write(g & 0xFF); out.write((g >> 8) & 0xFF);
+        out.write(e & 0xFF); out.write((e >> 8) & 0xFF);
+        out.write(0xFF); out.write(0xFF); out.write(0xFF); out.write(0xFF);
+    }
+
+    private void dicomItemHdr(ByteArrayOutputStream out) {
+        out.write(0xFE); out.write(0xFF); out.write(0x00); out.write(0xE0);
+        out.write(0xFF); out.write(0xFF); out.write(0xFF); out.write(0xFF);
+    }
+
+    private void dicomItemDelim(ByteArrayOutputStream out) {
+        out.write(0xFE); out.write(0xFF); out.write(0x0D); out.write(0xE0);
+        out.write(0x00); out.write(0x00); out.write(0x00); out.write(0x00);
+    }
+
+    private void dicomSeqDelim(ByteArrayOutputStream out) {
+        out.write(0xFE); out.write(0xFF); out.write(0xDD); out.write(0xE0);
+        out.write(0x00); out.write(0x00); out.write(0x00); out.write(0x00);
+    }
+
     private byte[] patchGroupLength(byte[] cmdBytes) {
         int gl = cmdBytes.length - 12;
         cmdBytes[8] = (byte) (gl & 0xFF);
@@ -758,26 +773,5 @@ public class DicomScpServer {
         out.write(4); out.write(0); out.write(0); out.write(0);
         out.write(v & 0xFF); out.write((v >> 8) & 0xFF);
         out.write((v >> 16) & 0xFF); out.write((v >> 24) & 0xFF);
-    }
-
-    private void dicomSeqHdr(ByteArrayOutputStream out, int g, int e) {
-        out.write(g & 0xFF); out.write((g >> 8) & 0xFF);
-        out.write(e & 0xFF); out.write((e >> 8) & 0xFF);
-        out.write(0xFF); out.write(0xFF); out.write(0xFF); out.write(0xFF);
-    }
-
-    private void dicomItemHdr(ByteArrayOutputStream out) {
-        out.write(0xFE); out.write(0xFF); out.write(0x00); out.write(0xE0);
-        out.write(0xFF); out.write(0xFF); out.write(0xFF); out.write(0xFF);
-    }
-
-    private void dicomItemDelim(ByteArrayOutputStream out) {
-        out.write(0xFE); out.write(0xFF); out.write(0x0D); out.write(0xE0);
-        out.write(0x00); out.write(0x00); out.write(0x00); out.write(0x00);
-    }
-
-    private void dicomSeqDelim(ByteArrayOutputStream out) {
-        out.write(0xFE); out.write(0xFF); out.write(0xDD); out.write(0xE0);
-        out.write(0x00); out.write(0x00); out.write(0x00); out.write(0x00);
     }
 }

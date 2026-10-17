@@ -43,7 +43,6 @@ public class RisDataStore {
     public static final String UNLINKED_ACCESSION = "UNLINKED-000";
     public static final String UNLINKED_ACCESSION_PREFIX = "UNLINKED-";
 
-    // ===== C-STORE TRACKING CONSTANTS =====
     public static final int MAX_FILES_PER_FOLDER = 10_000_000;
     public static final String CSTORE_CSV_NAME = "c-store.csv";
 
@@ -110,7 +109,6 @@ public class RisDataStore {
     private final Random random = new Random();
 
     public RisDataStore(Context context) {
-        // App-specific internal storage to fix permission denied errors
         dataDir = context.getExternalFilesDir(null);
         if (dataDir == null) {
             dataDir = context.getFilesDir();
@@ -374,7 +372,7 @@ public class RisDataStore {
             cStoreFile
         };
         for (File f : files) {
-            if (f.exists()) f.delete();
+            if (f != null && f.exists()) f.delete();
         }
         
         File root = getStorageRoot();
@@ -389,11 +387,18 @@ public class RisDataStore {
         storageIndex = 0;
         saveConfig();
 
-        resetWorklistToHeader();
+        csvData.clear();
+        csvData.add(CSV_HEADER);
+        accessionImageCount.clear(); // Ensure tracking is fully cleared
+        ensureUnlinkedPatientExists();
+        
         procCodes.clear();
         procCodesLoaded = false;
         patientsCsvData = null;
+        
+        loadCStoreTracking(); // Recreate blank c-store
         writeLog("All CSV files and image data deleted by user.");
+        notifyStatusChanged();
     }
 
     public synchronized List<String> getCsvRowsSnapshot() {
@@ -814,5 +819,53 @@ public class RisDataStore {
     private String escapeJson(String s) {
         if (s == null) return "";
         return s.replace("\\", "\\\\").replace("\"", "\\\"");
+    }
+
+    public synchronized void updateAccessionImages(String oldAcc, String[] newEntry) {
+        if (!cStoreFile.exists() || oldAcc == null || oldAcc.isEmpty()) return;
+        List<String> lines = new ArrayList<>();
+        boolean changed = false;
+        try (BufferedReader br = new BufferedReader(new FileReader(cStoreFile))) {
+            String header = br.readLine();
+            if (header != null) lines.add(header);
+            String line;
+            while ((line = br.readLine()) != null) {
+                String[] vals = parseCsvLineToEntry(line);
+                if (vals.length >= 9 && vals[0].equals(oldAcc)) {
+                    vals[0] = newEntry[8]; 
+                    vals[1] = newEntry[0]; 
+                    vals[2] = newEntry[1]; 
+                    lines.add(buildCsvLineFromEntry(vals));
+                    changed = true;
+                    
+                    File f = new File(new File(getStorageRoot(), vals[5]), vals[6]);
+                    if (f.exists()) {
+                        try {
+                            byte[] fileBytes = java.nio.file.Files.readAllBytes(f.toPath());
+                            boolean fChanged = false;
+                            fChanged |= DicomScpServer.patchTagInPlace(fileBytes, 0x0010, 0x0010, newEntry[0]); 
+                            fChanged |= DicomScpServer.patchTagInPlace(fileBytes, 0x0010, 0x0030, newEntry[2]); 
+                            fChanged |= DicomScpServer.patchTagInPlace(fileBytes, 0x0008, 0x0050, newEntry[8]); 
+                            if (fChanged) {
+                                try (FileOutputStream fos = new FileOutputStream(f)) {
+                                    fos.write(fileBytes);
+                                }
+                                writeLog("Patched DICOM file tags for moved accession: " + f.getName());
+                            }
+                        } catch (Exception ignored) {}
+                    }
+                } else {
+                    lines.add(line);
+                }
+            }
+        } catch (Exception e) {}
+        
+        if (changed) {
+            try (FileWriter fw = new FileWriter(cStoreFile, false)) {
+                for (String l : lines) fw.write(l + "\n");
+            } catch (Exception e) {}
+            accessionImageCount.remove(oldAcc);
+            accessionImageCount.put(newEntry[8], getStoredImagesForAccession(newEntry[8]).size());
+        }
     }
 }

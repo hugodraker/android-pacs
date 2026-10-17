@@ -26,7 +26,9 @@ import java.net.SocketTimeoutException;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 public class TelnetHttpServer {
     private final RisDataStore store;
@@ -43,6 +45,7 @@ public class TelnetHttpServer {
             "</style>" +
             "<script>var fnames=['PatientName','PatientID','BirthDate','Sex','ReqPhys','ReqSvc','ProcDesc','Reason','Accession','ProcID','Priority','StationAE','StartDate','StartTime','PerfPhys','SPSDesc','SPSID','StationName','Location','Status','Modality','RefPhys','StudyDesc','ProtoCode','ProtoScheme','ProtoMeaning','StudyUID'];" +
             "function f(r){var c=r.cells;for(var i=0;i<c.length&&i<fnames.length;i++){var e=document.getElementsByName(fnames[i])[0];if(e)e.value=(c[i].innerText||c[i].textContent).trim();}" +
+            "document.getElementById('oldAcc').value = c[8].innerText.trim();" +
             "var sel=document.getElementById('procCodeSel');if(sel){var pid=document.getElementsByName('ProcID')[0].value;for(var j=0;j<sel.options.length;j++){sel.options[j].selected=(sel.options[j].getAttribute('data-id')===pid);}}}" +
             "window.maxAcc=window.maxAcc||0;" +
             "function nxtA(){var t=document.getElementById('pTable'),m=0,p='ACC',c=5;if(t){for(var i=1;i<t.rows.length;i++){var v=t.rows[i].cells[8].innerText||'',mt=v.match(/([^0-9]*)([0-9]+)/);if(mt){p=mt[1];var val=parseInt(mt[2],10);if(val>m){m=val;c=mt[2].length;}}}}if(window.maxAcc<=m)window.maxAcc=m;window.maxAcc++;document.getElementsByName('Accession')[0].value=p+String(window.maxAcc).padStart(c,'0');}" +
@@ -50,6 +53,7 @@ public class TelnetHttpServer {
             "var pd=document.getElementsByName('ProcDesc')[0]; var sd=document.getElementsByName('StudyDesc')[0];" +
             "if(pd&&sd){ if(!pd.value&&sd.value)pd.value=sd.value; else if(!sd.value&&pd.value)sd.value=pd.value; }" +
             "var sel=document.getElementById('procCodeSel');var opts=[];if(sel){for(var j=0;j<sel.options.length;j++){if(sel.options[j].selected&&sel.options[j].value!=='')opts.push(sel.options[j]);}}" +
+            "var oldA = encodeURIComponent(document.getElementById('oldAcc').value);" +
             "if(opts.length>1){var p=[];for(var k=0;k<opts.length;k++){nxtA();" +
             "document.getElementsByName('Modality')[0].value=opts[k].getAttribute('data-mod')||'';" +
             "var nVal=opts[k].getAttribute('data-name')||''; var sdVal=opts[k].getAttribute('data-studydesc')||'';" +
@@ -63,8 +67,8 @@ public class TelnetHttpServer {
             "var sn=document.getElementsByName('StationName')[0];if(sn)sn.value='';" +
             "document.getElementsByName('Location')[0].value='';" +
             "var c=[];for(var i=0;i<fnames.length;i++){var el=document.getElementsByName(fnames[i])[0];var v=el?el.value:'';if(v.indexOf(',')>-1||v.indexOf('\"')>-1)v='\"'+v.replace(new RegExp('\"','g'),'\"\"')+'\"';c.push(v);}" +
-            "p.push(fetch('/manual',{method:'POST',body:c.join(',')}));}Promise.all(p).then(function(){window.location.href='/';});return false;}" +
-            "var c=[];for(var i=0;i<fnames.length;i++){var el=document.getElementsByName(fnames[i])[0];var v=el?el.value:'';if(v.indexOf(',')>-1||v.indexOf('\"')>-1)v='\"'+v.replace(new RegExp('\"','g'),'\"\"')+'\"';c.push(v);}fetch('/manual',{method:'POST',body:c.join(',')}).then(function(){window.location.href='/';});return false;}" +
+            "p.push(fetch('/manual?oldAcc='+oldA,{method:'POST',body:c.join(',')}));}Promise.all(p).then(function(){window.location.href='/';});return false;}" +
+            "var c=[];for(var i=0;i<fnames.length;i++){var el=document.getElementsByName(fnames[i])[0];var v=el?el.value:'';if(v.indexOf(',')>-1||v.indexOf('\"')>-1)v='\"'+v.replace(new RegExp('\"','g'),'\"\"')+'\"';c.push(v);}fetch('/manual?oldAcc='+oldA,{method:'POST',body:c.join(',')}).then(function(){window.location.href='/';});return false;}" +
             "function delP(){var a=document.getElementsByName('Accession')[0].value;if(a&&confirm('Delete Patient '+a+'?'))fetch('/delpat',{method:'POST',body:a}).then(function(){window.location.href='/';});}" +
             "function multiStudy(){alert('Stub not implemented');}" +
             "function sortTable(n){var t,r,sw,i,x,y,sd,d;t=document.getElementById('pTable');sw=true;d='asc';while(sw){sw=false;r=t.rows;for(i=1;i<(r.length-1);i++){sd=false;x=r[i].getElementsByTagName('TD')[n];y=r[i+1].getElementsByTagName('TD')[n];if(d=='asc'){if(x.innerHTML.toLowerCase()>y.innerHTML.toLowerCase()){sd=true;break;}}else{if(x.innerHTML.toLowerCase()<y.innerHTML.toLowerCase()){sd=true;break;}}}if(sd){r[i].parentNode.insertBefore(r[i+1],r[i]);sw=true;}}}" +
@@ -73,7 +77,7 @@ public class TelnetHttpServer {
             "var s=c[12].innerText;if(s.length===8)c[12].innerText=s.substr(0,4)+'-'+s.substr(4,2)+'-'+s.substr(6,2);" +
             "var tm=c[13].innerText;if(tm.length===6)c[13].innerText=tm.substr(0,2)+':'+tm.substr(2,2);" +
             "}}}" +
-            "function newPatient(){for(var i=0;i<fnames.length;i++){var el=document.getElementsByName(fnames[i])[0];if(el)el.value='';}var d=new Date(),y=d.getFullYear(),mo=('0'+(d.getMonth()+1)).slice(-2),da=('0'+d.getDate()).slice(-2);var sd=document.getElementsByName('StartDate')[0];if(sd)sd.value=y+'-'+mo+'-'+da;nxtA();var su=document.getElementsByName('StudyUID')[0];if(su){var sec=Math.floor(Date.now()/1000);var rnd=Math.floor(Math.random()*10000);su.value='1.2.840.113619.2.1.'+sec+'.'+rnd;}var stat=document.getElementsByName('Status')[0];if(stat)stat.value='1';var pri=document.getElementsByName('Priority')[0];if(pri)pri.value='LOW';var tm=document.getElementsByName('StartTime')[0];if(tm)tm.value='16:00';}" +
+            "function newPatient(){document.getElementById('oldAcc').value='';for(var i=0;i<fnames.length;i++){var el=document.getElementsByName(fnames[i])[0];if(el)el.value='';}var d=new Date(),y=d.getFullYear(),mo=('0'+(d.getMonth()+1)).slice(-2),da=('0'+d.getDate()).slice(-2);var sd=document.getElementsByName('StartDate')[0];if(sd)sd.value=y+'-'+mo+'-'+da;nxtA();var su=document.getElementsByName('StudyUID')[0];if(su){var sec=Math.floor(Date.now()/1000);var rnd=Math.floor(Math.random()*10000);su.value='1.2.840.113619.2.1.'+sec+'.'+rnd;}var stat=document.getElementsByName('Status')[0];if(stat)stat.value='1';var pri=document.getElementsByName('Priority')[0];if(pri)pri.value='LOW';var tm=document.getElementsByName('StartTime')[0];if(tm)tm.value='16:00';}" +
             "function loadProcCode(){var sel=document.getElementById('procCodeSel');if(sel&&sel.selectedIndex>=0){var opt=sel.options[sel.selectedIndex];" +
             "var id=document.getElementsByName('ProcID')[0];var code=document.getElementsByName('SPSID')[0];var mod=document.getElementsByName('Modality')[0];" +
             "var desc=document.getElementsByName('ProcDesc')[0];var stDesc=document.getElementsByName('StudyDesc')[0];var spsDesc=document.getElementsByName('SPSDesc')[0];" +
@@ -114,7 +118,7 @@ public class TelnetHttpServer {
             "<div class='form-row' style='display:flex; flex-wrap:wrap; align-items:center; gap:10px; margin-top:20px; margin-bottom:15px;'>" +
             "<button type='button' onclick='newPatient()' class='top-btn bg-green'>New Patient</button>" +
             "<button type='button' onclick='filterPatients()' class='top-btn bg-blue'>Search</button>" +
-            "</div><hr><form id='manForm'>";
+            "</div><hr><form id='manForm'><input type='hidden' id='oldAcc' name='oldAcc' value=''>";
 
     private static final String HTML_FORMS_INPUTS =
             "<input type='text' name='PatientName' placeholder='Patient Name'> <input type='text' name='PatientID' placeholder='Patient ID'> Birth: <input type='date' name='BirthDate'> <select name='Sex'><option value=''>Sex</option><option value='M'>M</option><option value='F'>F</option><option value='O'>O</option></select><br>" +
@@ -343,7 +347,6 @@ public class TelnetHttpServer {
             String method = parts.length > 0 ? parts[0] : "GET";
             String url = parts.length > 1 ? parts[1] : "/";
 
-            // Verify authentication cookie for all /settings routes
             boolean hasAuth = false;
             for (String hLine : headerStr.split("\r\n")) {
                 if (hLine.toLowerCase().startsWith("cookie:")) {
@@ -584,8 +587,21 @@ public class TelnetHttpServer {
                 if (url.startsWith("/delpat")) {
                     store.deletePatientByAccession(bodyStr.trim());
                 } else if (url.startsWith("/manual")) {
+                    String oldAcc = "";
+                    int qIdx = url.indexOf("oldAcc=");
+                    if (qIdx >= 0) {
+                        int amp = url.indexOf('&', qIdx);
+                        oldAcc = URLDecoder.decode(url.substring(qIdx + 7, amp < 0 ? url.length() : amp), "UTF-8");
+                    }
+                    
                     String[] entry = RisDataStore.parseCsvLineToEntry(bodyStr.trim());
                     if (RisDataStore.validateEntry(entry)) {
+                        if (!oldAcc.isEmpty() && !oldAcc.equals(entry[8])) {
+                            store.updateAccessionImages(oldAcc, entry);
+                            store.deletePatientByAccession(oldAcc);
+                        } else if (!oldAcc.isEmpty()) {
+                            store.updateAccessionImages(oldAcc, entry);
+                        }
                         store.normalizeAndUpsertEntry(entry);
                     }
                 }
@@ -752,7 +768,14 @@ public class TelnetHttpServer {
             } catch (Exception ignored) {}
 
             sb.append("<script>var rData = [");
+            Set<String> roomSet = new HashSet<>();
+            Set<String> stnSet = new HashSet<>();
+            Set<String> modSet = new HashSet<>();
+            
             for (String[] r : rList) {
+                if (!r[5].isEmpty()) roomSet.add(r[5]);
+                if (!r[4].isEmpty()) stnSet.add(r[4]);
+                if (!r[2].isEmpty()) modSet.add(r[2]);
                 sb.append(String.format("{id:'%s',loc:'%s',mod:'%s',ae:'%s',name:'%s',room:'%s'},",
                         escapeJs(r[0]), escapeJs(r[1]), escapeJs(r[2]), escapeJs(r[3]), escapeJs(r[4]), escapeJs(r[5])));
             }
@@ -766,19 +789,13 @@ public class TelnetHttpServer {
                       "if(mod) mod.value=r.mod; " +
                       "} }</script>");
 
-            for (String[] r : rList) {
-                sb.append("<option value=\"").append(escapeJs(r[5])).append("\">"); 
-            }
+            for (String s : roomSet) sb.append("<option value=\"").append(escapeJs(s)).append("\">");
             sb.append("</datalist>");
             
-            for (String[] r : rList) {
-                sb.append("<option value=\"").append(escapeJs(r[4])).append("\">"); 
-            }
+            for (String s : stnSet) sb.append("<option value=\"").append(escapeJs(s)).append("\">");
             sb.append("</datalist>");
             
-            for (String[] r : rList) {
-                sb.append("<option value=\"").append(escapeJs(r[2])).append("\">"); 
-            }
+            for (String s : modSet) sb.append("<option value=\"").append(escapeJs(s)).append("\">");
             sb.append("</datalist>");
         } else {
             sb.append("</datalist></datalist></datalist>");
