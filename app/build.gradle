@@ -8,8 +8,8 @@ android {
 
     defaultConfig {
         applicationId "com.hugo.risserver"
-        minSdk 24
-        targetSdk 34
+        minSdk 9      // Android 2.3 Gingerbread
+        targetSdk 10  // Android 2.3.3
         versionCode 1
         versionName "1.0"
     }
