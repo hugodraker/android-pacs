@@ -4,7 +4,7 @@
  * THIS WORK IS NOT FIT FOR ANY FUNCTION OR PURPOSE, COMES WITH NO WARRANTY,
  * AND IS BEING RELEASED INTO THE PUBLIC DOMAIN.
  *
- * 2026-10-16 Hugo
+ * 2026-10-11 Hugo
  *
  * ============================================================================ */
 
@@ -62,7 +62,6 @@ public class TelnetHttpServer {
             "p.push(fetch('/manual',{method:'POST',body:c.join(',')}));}Promise.all(p).then(function(){window.location.href='/';});return false;}" +
             "var c=[];for(var i=0;i<fnames.length;i++){var el=document.getElementsByName(fnames[i])[0];var v=el?el.value:'';if(v.indexOf(',')>-1||v.indexOf('\"')>-1)v='\"'+v.replace(new RegExp('\"','g'),'\"\"')+'\"';c.push(v);}fetch('/manual',{method:'POST',body:c.join(',')}).then(function(){window.location.href='/';});return false;}" +
             "function delP(){var a=document.getElementsByName('Accession')[0].value;if(a&&confirm('Delete Patient '+a+'?'))fetch('/delpat',{method:'POST',body:a}).then(function(){window.location.href='/';});}" +
-            "function delAll(){var p=prompt('Enter password to delete all data:');if(p!==null){document.getElementById('delPwd').value=p;document.getElementById('delAllForm').submit();}}" +
             "function multiStudy(){alert('Stub not implemented');}" +
             "function sortTable(n){var t,r,sw,i,x,y,sd,d;t=document.getElementById('pTable');sw=true;d='asc';while(sw){sw=false;r=t.rows;for(i=1;i<(r.length-1);i++){sd=false;x=r[i].getElementsByTagName('TD')[n];y=r[i+1].getElementsByTagName('TD')[n];if(d=='asc'){if(x.innerHTML.toLowerCase()>y.innerHTML.toLowerCase()){sd=true;break;}}else{if(x.innerHTML.toLowerCase()<y.innerHTML.toLowerCase()){sd=true;break;}}}if(sd){r[i].parentNode.insertBefore(r[i+1],r[i]);sw=true;}}}" +
             "function formatDates(){var t=document.getElementById('pTable');if(!t)return;for(var i=1;i<t.rows.length;i++){var c=t.rows[i].cells;if(c.length>13){" +
@@ -107,15 +106,7 @@ public class TelnetHttpServer {
             "<div class='form-row' style='display:flex; flex-wrap:wrap; align-items:center; gap:10px; margin-top:20px; margin-bottom:15px;'>" +
             "<button type='button' onclick='newPatient()' class='top-btn bg-green'>New Patient</button>" +
             "<button type='button' onclick='filterPatients()' class='top-btn bg-blue'>Search</button>" +
-            "<form action='/upload' method='POST' enctype='multipart/form-data' id='uploadForm' style='display:inline-flex; align-items:center; gap:10px; margin:0;'>" +
-            "<input type='file' name='csvfile' id='csvfile' style='display:none;' onchange='document.getElementById(\"uploadForm\").submit();'>" +
-            "<label for='csvfile' class='top-btn bg-blue'>Choose File</label>" +
-            "</form>" +
-            "<form action='/delete' method='POST' id='delAllForm' style='margin:0;'>" +
-            "<input type='hidden' name='pwd' id='delPwd' value=''>" +
-            "<input type='button' value='Delete All Data' class='top-btn bg-red' onclick='delAll()'>" +
-            "</form></div><hr>" +
-            "<form id='manForm'>";
+            "</div><hr><form id='manForm'>";
 
     private static final String HTML_FORMS_INPUTS =
             "<input type='text' name='PatientName' placeholder='Patient Name'> <input type='text' name='PatientID' placeholder='Patient ID'> Birth: <input type='date' name='BirthDate'> <select name='Sex'><option value=''>Sex</option><option value='M'>M</option><option value='F'>F</option><option value='O'>O</option></select><br>" +
@@ -126,14 +117,15 @@ public class TelnetHttpServer {
 
     private static final String HTML_FORMS_2 =
             " <select name='Status'><option value='0'>NONE</option><option value='1' selected>SCHEDULED</option><option value='2'>ARRIVED</option><option value='3'>READY</option><option value='4'>STARTED</option><option value='5'>DEPARTED</option></select><br>" +
-            "<input type='text' name='Modality' placeholder='Modality'> <input type='text' name='RefPhys' placeholder='Ref Phys'> <input type='text' name='StudyDesc' placeholder='Study Desc'><br>" +
+            "<input type='text' name='RefPhys' placeholder='Ref Phys'> <input type='text' name='StudyDesc' placeholder='Study Desc'><br>" +
             "<input type='text' name='ProtoCode' placeholder='Proto Code'> <input type='text' name='ProtoScheme' placeholder='Proto Scheme'> <input type='text' name='ProtoMeaning' placeholder='Proto Meaning'><br>" +
             "<input type='text' name='StudyUID' placeholder='Study UID' style='width:300px;'><br>" +
             "<div style='margin-top:15px; display:flex; flex-wrap:wrap; gap:10px;'>" +
             "<button type='button' onclick='sendMan()' class='top-btn bg-green'>Add/Edit Patient</button> " +
             "<button type='button' onclick='nxtA()' class='top-btn bg-blue'>Next Accession</button> " +
             "<button type='button' onclick='multiStudy()' class='top-btn bg-blue'>Stub</button> " +
-            "<button type='button' onclick='delP()' class='top-btn bg-red'>Delete Patient</button></div></form><hr>";
+            "<button type='button' onclick='delP()' class='top-btn bg-red'>Delete Patient</button></div></form><hr>" +
+            "<br><a href='/settings' class='top-btn bg-blue' style='background:#455A64'>Settings</a>";
 
     private static final String HTML_END = "</body></html>";
 
@@ -243,9 +235,9 @@ public class TelnetHttpServer {
     private boolean lineMatchesDisp(String line, String param) {
         if (param == null || param.isEmpty()) return true;
         String[] temp = RisDataStore.parseCsvLineToEntry(line);
-        if (temp[20].equalsIgnoreCase(param)) return true; // Modality
-        if (temp[11].equalsIgnoreCase(param)) return true; // StationAE
-        return param.matches("^\\d{8}$") && temp[1].equals(param); // 8-digit PatientID
+        if (temp[20].equalsIgnoreCase(param)) return true; 
+        if (temp[11].equalsIgnoreCase(param)) return true; 
+        return param.matches("^\\d{8}$") && temp[1].equals(param); 
     }
 
     // ===== HTTP Server =====
@@ -275,6 +267,18 @@ public class TelnetHttpServer {
         } catch (IOException e) {
             if (running) store.writeLog("ERROR: Failed to listen on HTTP port " + store.httpPort);
         }
+    }
+
+    private String extractMultipartField(String bodyStr, String fieldName) {
+        String search = "name=\"" + fieldName + "\"";
+        int idx = bodyStr.indexOf(search);
+        if (idx < 0) return null;
+        int endHeader = bodyStr.indexOf("\r\n\r\n", idx);
+        if (endHeader < 0) return null;
+        int startVal = endHeader + 4;
+        int endVal = bodyStr.indexOf("\r\n--", startVal);
+        if (endVal < 0) return null;
+        return bodyStr.substring(startVal, endVal);
     }
 
     private void handleHttpClient(Socket client) {
@@ -388,29 +392,88 @@ public class TelnetHttpServer {
                 return;
             }
 
+            if (method.equals("GET") && url.equals("/settings")) {
+                sendHttpResponse(out, "200 OK", "text/html; charset=utf-8", buildSettingsHtml());
+                return;
+            }
+
+            if (method.equals("GET") && url.startsWith("/settings/download?file=")) {
+                String fileReq = url.substring(24);
+                if (fileReq.equals("worklist")) {
+                     StringBuilder sb = new StringBuilder();
+                     for(String row : store.getCsvRowsSnapshot()) sb.append(row).append("\r\n");
+                     sendHttpResponse(out, "200 OK", "text/csv; charset=utf-8", sb.toString());
+                } else {
+                     File f = new File(store.dataDir, fileReq);
+                     if (f.exists()) {
+                         byte[] data = java.nio.file.Files.readAllBytes(f.toPath());
+                         String hdr = "HTTP/1.1 200 OK\r\n" +
+                                      "Content-Type: text/csv\r\n" +
+                                      "Content-Disposition: attachment; filename=\"" + f.getName() + "\"\r\n" +
+                                      "Content-Length: " + data.length + "\r\n" +
+                                      "Connection: close\r\n\r\n";
+                         out.write(hdr.getBytes(StandardCharsets.UTF_8));
+                         out.write(data);
+                         out.flush();
+                     } else {
+                         sendHttpResponse(out, "404 Not Found", "text/plain", "File not found.");
+                     }
+                }
+                return;
+            }
+
             if (method.equals("GET")) {
                 sendHttpResponse(out, "200 OK", "text/html; charset=utf-8", buildMainHtml());
                 return;
             }
 
             if (method.equals("POST")) {
-                if (url.startsWith("/delete")) {
-                    String inputPwd = "";
-                    int pwdIdx = bodyStr.indexOf("pwd=");
-                    if (pwdIdx >= 0) {
-                        String sub = bodyStr.substring(pwdIdx + 4);
-                        int amp = sub.indexOf('&');
-                        if (amp >= 0) sub = sub.substring(0, amp);
-                        inputPwd = URLDecoder.decode(sub.trim(), "UTF-8");
+                if (url.equals("/settings/delete_all")) {
+                    String inputPwd = extractMultipartField(bodyStr, "pwd");
+                    if (inputPwd == null) {
+                        int pwdIdx = bodyStr.indexOf("pwd=");
+                        if (pwdIdx >= 0) {
+                            String sub = bodyStr.substring(pwdIdx + 4);
+                            int amp = sub.indexOf('&');
+                            if (amp >= 0) sub = sub.substring(0, amp);
+                            inputPwd = URLDecoder.decode(sub.trim(), "UTF-8");
+                        }
                     }
-                    if (inputPwd.equals(store.delPwd)) {
-                        store.resetWorklistToHeader();
+                    if (inputPwd != null && inputPwd.equals(store.delPwd)) {
+                        store.deleteAllCsvFiles();
                         sendHttpResponse(out, "200 OK", "text/html; charset=utf-8",
-                                HTML_START + "<meta http-equiv='refresh' content='1; url=/' /><h2>Data Deleted Successfully. Redirecting...</h2>" + HTML_END);
+                                HTML_START + "<meta http-equiv='refresh' content='1; url=/settings' /><h2>All Data Deleted Successfully. Redirecting...</h2>" + HTML_END);
                     } else {
                         sendHttpResponse(out, "200 OK", "text/html; charset=utf-8",
-                                HTML_START + "<meta http-equiv='refresh' content='2; url=/' /><h2>Invalid Password! Redirecting...</h2>" + HTML_END);
+                                HTML_START + "<meta http-equiv='refresh' content='2; url=/settings' /><h2>Invalid Password! Redirecting...</h2>" + HTML_END);
                     }
+                    return;
+                }
+
+                if (url.equals("/settings/upload")) {
+                    String csvType = extractMultipartField(bodyStr, "csvType");
+                    String fileData = extractMultipartField(bodyStr, "file");
+                    if (csvType != null && fileData != null && !fileData.trim().isEmpty()) {
+                        if (csvType.equals("worklist")) {
+                            int csvIdx = fileData.indexOf(RisDataStore.CSV_HEADER);
+                            if (csvIdx >= 0) {
+                                String after = fileData.substring(csvIdx + RisDataStore.CSV_HEADER.length());
+                                for (String l : after.split("\\r?\\n")) {
+                                    String trimmed = l.trim();
+                                    if (trimmed.isEmpty() || trimmed.startsWith("-")) continue;
+                                    String[] entry = RisDataStore.parseCsvLineToEntry(trimmed);
+                                    if (RisDataStore.validateEntry(entry)) store.normalizeAndUpsertEntry(entry);
+                                }
+                            }
+                        } else {
+                            File outF = new File(store.dataDir, csvType);
+                            try (java.io.FileWriter fw = new java.io.FileWriter(outF)) {
+                                fw.write(fileData.trim());
+                            }
+                            if (csvType.equals("pcodes.csv")) store.loadProcedureCodes();
+                        }
+                    }
+                    sendHttpResponse(out, "200 OK", "text/html; charset=utf-8", HTML_START + "<meta http-equiv='refresh' content='0; url=/settings' /><h2>Upload Complete</h2>" + HTML_END);
                     return;
                 }
 
@@ -420,18 +483,29 @@ public class TelnetHttpServer {
                     String[] entry = RisDataStore.parseCsvLineToEntry(bodyStr.trim());
                     if (RisDataStore.validateEntry(entry)) {
                         store.normalizeAndUpsertEntry(entry);
-                    }
-                } else if (url.startsWith("/upload")) {
-                    int csvIdx = bodyStr.indexOf(RisDataStore.CSV_HEADER);
-                    if (csvIdx >= 0) {
-                        String after = bodyStr.substring(csvIdx + RisDataStore.CSV_HEADER.length());
-                        for (String l : after.split("\\r?\\n")) {
-                            String trimmed = l.trim();
-                            if (trimmed.isEmpty()) continue;
-                            if (trimmed.startsWith("-")) break;
-                            String[] entry = RisDataStore.parseCsvLineToEntry(trimmed);
-                            if (RisDataStore.validateEntry(entry)) {
-                                store.normalizeAndUpsertEntry(entry);
+                        
+                        List<RisDataStore.StoredImageInfo> images = store.getStoredImagesForAccession(entry[8]);
+                        for (RisDataStore.StoredImageInfo img : images) {
+                            File f = store.getImageFilePath(img.sopInstanceUID);
+                            if (f != null && f.exists()) {
+                                try {
+                                    byte[] fileBytes = java.nio.file.Files.readAllBytes(f.toPath());
+                                    boolean changed = false;
+                                    changed |= DicomScpServer.patchTagInPlace(fileBytes, 0x0010, 0x0010, entry[0]); 
+                                    changed |= DicomScpServer.patchTagInPlace(fileBytes, 0x0010, 0x0020, entry[1]); 
+                                    changed |= DicomScpServer.patchTagInPlace(fileBytes, 0x0010, 0x0030, entry[2]); 
+                                    changed |= DicomScpServer.patchTagInPlace(fileBytes, 0x0010, 0x0040, entry[3]); 
+                                    changed |= DicomScpServer.patchTagInPlace(fileBytes, 0x0008, 0x0050, entry[8]); 
+                                    changed |= DicomScpServer.patchTagInPlace(fileBytes, 0x0008, 0x1030, entry[22]);
+                                    changed |= DicomScpServer.patchTagInPlace(fileBytes, 0x0008, 0x0060, entry[20]);
+                                    
+                                    if (changed) {
+                                        try (FileOutputStream fos = new FileOutputStream(f)) {
+                                            fos.write(fileBytes);
+                                        }
+                                        store.writeLog("Retroactively patched DICOM file tags: " + f.getName());
+                                    }
+                                } catch (Exception ignored) {}
                             }
                         }
                     }
@@ -444,6 +518,39 @@ public class TelnetHttpServer {
         } finally {
             try { client.close(); } catch (IOException ignored) {}
         }
+    }
+
+    private String buildSettingsHtml() {
+        return HTML_START + 
+            "<h2>Settings Panel</h2>" +
+            "<div class='query-box'>" +
+            "<h3>Upload Data Files</h3>" +
+            "<form action='/settings/upload' method='POST' enctype='multipart/form-data'>" +
+            "<select name='csvType' class='top-btn bg-blue' style='width:auto;'>" +
+            "<option value='worklist'>Main Worklist (Append)</option>" +
+            "<option value='patients.csv'>patients.csv</option>" +
+            "<option value='pcodes.csv'>pcodes.csv</option>" +
+            "<option value='rooms.csv'>rooms.csv</option>" +
+            "</select> " +
+            "<input type='file' name='file' class='top-btn bg-blue' style='width:auto;'> " +
+            "<input type='submit' value='Upload' class='top-btn bg-green'>" +
+            "</form></div>" +
+            "<div class='query-box'>" +
+            "<h3>Download Data Files</h3>" +
+            "<a href='/settings/download?file=worklist' class='top-btn bg-blue'>Worklist</a> " +
+            "<a href='/settings/download?file=patients.csv' class='top-btn bg-blue'>patients.csv</a> " +
+            "<a href='/settings/download?file=pcodes.csv' class='top-btn bg-blue'>pcodes.csv</a> " +
+            "<a href='/settings/download?file=rooms.csv' class='top-btn bg-blue'>rooms.csv</a> " +
+            "<a href='/settings/download?file=c-store.csv' class='top-btn bg-blue'>c-store.csv</a>" +
+            "</div>" +
+            "<div class='query-box' style='border:2px solid #f44336;'>" +
+            "<h3>Danger Zone</h3>" +
+            "<form action='/settings/delete_all' method='POST'>" +
+            "<input type='password' name='pwd' placeholder='Enter Password' required> " +
+            "<input type='submit' value='Delete All Data & CSVs' class='top-btn bg-red'>" +
+            "</form></div>" +
+            "<br><a href='/' class='top-btn bg-blue'>Back to Worklist</a>" +
+            HTML_END;
     }
 
     private String buildMainHtml() {
@@ -517,8 +624,10 @@ public class TelnetHttpServer {
         sb.append("</select></div></div>");
         sb.append(HTML_FORMS_INPUTS);
 
-        // Station rooms dropdown from rooms.csv
         File roomsFile = new File(store.dataDir, "rooms.csv");
+        sb.append("<datalist id='roomList'>");
+        sb.append("<datalist id='stNameList'>");
+        sb.append("<datalist id='modList'>");
         if (roomsFile.exists()) {
             List<String[]> rList = new ArrayList<>();
             try (BufferedReader br = new BufferedReader(new FileReader(roomsFile))) {
@@ -541,23 +650,48 @@ public class TelnetHttpServer {
                 sb.append(String.format("{id:'%s',loc:'%s',mod:'%s',ae:'%s',name:'%s',room:'%s'},",
                         r[0], r[1], r[2], r[3], r[4], r[5]));
             }
-            sb.append("]; function updR() { var idx = document.getElementsByName('StationName')[0].selectedIndex - 1; if(idx>=0) { " +
-                      "var r=rData[idx]; document.getElementsByName('Location')[0].value=r.room; " +
-                      "document.getElementsByName('Modality')[0].value=r.mod; " +
+            sb.append("]; function updLoc(val) { var r = rData.find(function(x) { return x.room === val; });" +
+                      "if(r) { " +
+                      "document.getElementsByName('StationName')[0].value=r.name; " +
                       "document.getElementsByName('StationAE')[0].value=r.ae; " +
-                      "document.getElementsByName('SPSID')[0].value=r.ae; " +
-                      "document.getElementsByName('ProcDesc')[0].value=r.name; } }</script>");
+                      "document.getElementsByName('Modality')[0].value=r.mod; " +
+                      "} }</script>");
 
-            sb.append("<select name='StationName' onchange='updR()'><option value=''>Station Name</option>");
             for (String[] r : rList) {
-                sb.append("<option value=\"").append(r[4]).append("\">").append(r[4]).append("</option>");
+                sb.append("<option value=\"").append(r[5]).append("\">");
             }
-            sb.append("</select> <input type='text' name='Location' placeholder='Location'> ");
+            sb.append("</datalist>");
+            
+            for (String[] r : rList) {
+                sb.append("<option value=\"").append(r[4]).append("\">");
+            }
+            sb.append("</datalist>");
+            
+            for (String[] r : rList) {
+                sb.append("<option value=\"").append(r[2]).append("\">");
+            }
+            sb.append("</datalist>");
         } else {
-            sb.append("<input type='text' name='StationName' placeholder='Station Name'> <input type='text' name='Location' placeholder='Location'> ");
+            sb.append("</datalist></datalist></datalist>");
+            sb.append("<script>function updLoc(val) {}</script>");
         }
 
-        sb.append(HTML_FORMS_2);
+        sb.append("<input type='text' name='StationName' list='stNameList' placeholder='Station Name'> ");
+        sb.append("<input type='text' name='Location' list='roomList' oninput='updLoc(this.value)' placeholder='Location'> ");
+        
+        sb.append(" <select name='Status'><option value='0'>NONE</option><option value='1' selected>SCHEDULED</option><option value='2'>ARRIVED</option><option value='3'>READY</option><option value='4'>STARTED</option><option value='5'>DEPARTED</option></select><br>");
+        sb.append("<input type='text' name='Modality' list='modList' placeholder='Modality'> ");
+        
+        sb.append("<input type='text' name='RefPhys' placeholder='Ref Phys'> <input type='text' name='StudyDesc' placeholder='Study Desc'><br>" +
+            "<input type='text' name='ProtoCode' placeholder='Proto Code'> <input type='text' name='ProtoScheme' placeholder='Proto Scheme'> <input type='text' name='ProtoMeaning' placeholder='Proto Meaning'><br>" +
+            "<input type='text' name='StudyUID' placeholder='Study UID' style='width:300px;'><br>" +
+            "<div style='margin-top:15px; display:flex; flex-wrap:wrap; gap:10px;'>" +
+            "<button type='button' onclick='sendMan()' class='top-btn bg-green'>Add/Edit Patient</button> " +
+            "<button type='button' onclick='nxtA()' class='top-btn bg-blue'>Next Accession</button> " +
+            "<button type='button' onclick='multiStudy()' class='top-btn bg-blue'>Stub</button> " +
+            "<button type='button' onclick='delP()' class='top-btn bg-red'>Delete Patient</button></div></form><hr>" +
+            "<br><a href='/settings' class='top-btn bg-blue' style='background:#455A64'>Settings</a>");
+
         sb.append(HTML_END);
         return sb.toString();
     }

@@ -4,7 +4,7 @@
  * THIS WORK IS NOT FIT FOR ANY FUNCTION OR PURPOSE, COMES WITH NO WARRANTY,
  * AND IS BEING RELEASED INTO THE PUBLIC DOMAIN.
  *
- * 2026-10-16 Hugo
+ * 2026-10-11 Hugo
  *
  * ============================================================================ */
 
@@ -13,7 +13,6 @@ package com.hugo.risserver;
 import android.content.Context;
 import android.os.Environment;
 import java.io.BufferedReader;
-import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
@@ -46,7 +45,7 @@ public class RisDataStore {
     public static final String UNLINKED_ACCESSION_PREFIX = "UNLINKED-";
 
     // ===== C-STORE TRACKING CONSTANTS =====
-    public static final int MAX_FILES_PER_FOLDER = 10_000_000; // I0000000..I9999999
+    public static final int MAX_FILES_PER_FOLDER = 10_000_000;
     public static final String CSTORE_CSV_NAME = "c-store.csv";
 
     public interface LogListener {
@@ -109,41 +108,24 @@ public class RisDataStore {
     private LogListener logListener;
     private final Random random = new Random();
 
-    //public RisDataStore(Context context) {
-    //    File publicDir = Environment.getExternalStorageDirectory();
-    //    dataDir = new File(publicDir, "RisServerData");
+    public RisDataStore(Context context) {
+        File publicDir = Environment.getExternalStorageDirectory();
+        dataDir = new File(publicDir, "RisServerData");
 
-    //    if (!dataDir.exists()) {
-    //        dataDir.mkdirs();
-    //    }
+        if (!dataDir.exists()) {
+            dataDir.mkdirs();
+        }
 
-     //   iniFile = new File(dataDir, "RIS_SERVER.ini");
-     //   logFile = new File(dataDir, "ris_server.log");
-     //   cStoreFile = new File(dataDir, CSTORE_CSV_NAME);
+        iniFile = new File(dataDir, "RIS_SERVER.ini");
+        logFile = new File(dataDir, "ris_server.log");
+        cStoreFile = new File(dataDir, CSTORE_CSV_NAME);
 
-     //   loadConfig();
-     //   ensureCsvInitialized();
-     //   resetWorklistToHeader(); 
-     //   loadProcedureCodes();
-     //   loadCStoreTracking();
-   // }
-
-public RisDataStore(Context context) {
-    // This automatically resolves to /storage/emulated/0/Android/data/com.hugo.risserver/files/
-    dataDir = context.getExternalFilesDir(null);
-    if (dataDir == null) dataDir = context.getFilesDir();
-    if (!dataDir.exists()) dataDir.mkdirs();
-
-    iniFile = new File(dataDir, "RIS_SERVER.ini");
-    logFile = new File(dataDir, "ris_server.log");
-    cStoreFile = new File(dataDir, CSTORE_CSV_NAME);
-
-    loadConfig();
-    ensureCsvInitialized();
-    resetWorklistToHeader();      
-    loadProcedureCodes();
-    loadCStoreTracking();
-}
+        loadConfig();
+        ensureCsvInitialized();
+        resetWorklistToHeader();
+        loadProcedureCodes();
+        loadCStoreTracking();
+    }
 
     public void setLogListener(LogListener listener) {
         this.logListener = listener;
@@ -188,8 +170,7 @@ public RisDataStore(Context context) {
         if (aeCalled.length() > 31) aeCalled = aeCalled.substring(0, 31);
     }
 
-public synchronized void loadConfig() {
-        // Ensure the root data directory exists first
+    public synchronized void loadConfig() {
         if (!dataDir.exists()) {
             dataDir.mkdirs();
         }
@@ -227,7 +208,6 @@ public synchronized void loadConfig() {
             }
         }
 
-        // Proactively make all storage folders and subfolders prior to getting images
         File root = new File(dataDir, storageRootName);
         if (!root.exists()) {
             root.mkdirs();
@@ -239,7 +219,6 @@ public synchronized void loadConfig() {
     }
 
     public synchronized void saveConfig() {
-        // Ensure parent directory exists before attempting to write the INI
         if (!iniFile.getParentFile().exists()) {
             iniFile.getParentFile().mkdirs();
         }
@@ -367,6 +346,23 @@ public synchronized void loadConfig() {
         csvData.add(CSV_HEADER);
         ensureUnlinkedPatientExists();
         notifyStatusChanged();
+    }
+
+    public synchronized void deleteAllCsvFiles() {
+        File[] files = {
+            new File(dataDir, "patients.csv"),
+            new File(dataDir, "pcodes.csv"),
+            new File(dataDir, "rooms.csv"),
+            cStoreFile
+        };
+        for (File f : files) {
+            if (f.exists()) f.delete();
+        }
+        resetWorklistToHeader();
+        procCodes.clear();
+        procCodesLoaded = false;
+        patientsCsvData = null;
+        writeLog("All CSV files deleted by user.");
     }
 
     public synchronized List<String> getCsvRowsSnapshot() {
@@ -627,7 +623,7 @@ public synchronized void loadConfig() {
 
     public synchronized void loadProcedureCodes() {
         procCodes.clear();
-        File f = new File(dataDir, "procedurecodes.csv");
+        File f = new File(dataDir, "pcodes.csv");
         if (!f.exists()) {
             procCodesLoaded = true;
             return;
