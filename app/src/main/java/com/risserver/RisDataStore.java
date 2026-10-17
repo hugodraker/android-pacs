@@ -4,7 +4,7 @@
  * THIS WORK IS NOT FIT FOR ANY FUNCTION OR PURPOSE, COMES WITH NO WARRANTY,
  * AND IS BEING RELEASED INTO THE PUBLIC DOMAIN.
  *
- * 2026-10-11 Hugo
+ * 2026-10-16 Hugo
  *
  * ============================================================================ */
 
@@ -109,24 +109,41 @@ public class RisDataStore {
     private LogListener logListener;
     private final Random random = new Random();
 
-    public RisDataStore(Context context) {
-        File publicDir = Environment.getExternalStorageDirectory();
-        dataDir = new File(publicDir, "RisServerData");
+    //public RisDataStore(Context context) {
+    //    File publicDir = Environment.getExternalStorageDirectory();
+    //    dataDir = new File(publicDir, "RisServerData");
 
-        if (!dataDir.exists()) {
-            dataDir.mkdirs();
-        }
+    //    if (!dataDir.exists()) {
+    //        dataDir.mkdirs();
+    //    }
 
-        iniFile = new File(dataDir, "RIS_SERVER.ini");
-        logFile = new File(dataDir, "ris_server.log");
-        cStoreFile = new File(dataDir, CSTORE_CSV_NAME);
+     //   iniFile = new File(dataDir, "RIS_SERVER.ini");
+     //   logFile = new File(dataDir, "ris_server.log");
+     //   cStoreFile = new File(dataDir, CSTORE_CSV_NAME);
 
-        loadConfig();
-        ensureCsvInitialized();
-        resetWorklistToHeader(); 
-        loadProcedureCodes();
-        loadCStoreTracking();
-    }
+     //   loadConfig();
+     //   ensureCsvInitialized();
+     //   resetWorklistToHeader(); 
+     //   loadProcedureCodes();
+     //   loadCStoreTracking();
+   // }
+
+public RisDataStore(Context context) {
+    // This automatically resolves to /storage/emulated/0/Android/data/com.hugo.risserver/files/
+    dataDir = context.getExternalFilesDir(null);
+    if (dataDir == null) dataDir = context.getFilesDir();
+    if (!dataDir.exists()) dataDir.mkdirs();
+
+    iniFile = new File(dataDir, "RIS_SERVER.ini");
+    logFile = new File(dataDir, "ris_server.log");
+    cStoreFile = new File(dataDir, CSTORE_CSV_NAME);
+
+    loadConfig();
+    ensureCsvInitialized();
+    resetWorklistToHeader();      
+    loadProcedureCodes();
+    loadCStoreTracking();
+}
 
     public void setLogListener(LogListener listener) {
         this.logListener = listener;
