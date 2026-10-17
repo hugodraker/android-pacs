@@ -132,6 +132,26 @@ public class RisDataStore {
         loadCStoreTracking();
     }
 
+//public RisDataStore(Context context) {
+    // Target a public shared folder on the primary shared storage (accessible to other apps)
+ //   File publicDir = android.os.Environment.getExternalStorageDirectory();
+  //  dataDir = new File(publicDir, "RisServerData");
+
+  //  if (!dataDir.exists()) {
+        dataDir.mkdirs();
+  //  }
+
+  //  iniFile = new File(dataDir, "RIS_SERVER.ini");
+  //  logFile = new File(dataDir, "ris_server.log");
+  //  cStoreFile = new File(dataDir, CSTORE_CSV_NAME);
+
+  //  loadConfig();
+  //  ensureCsvInitialized();
+ //   resetWorklistToHeader();
+ //   loadProcedureCodes();
+ //   loadCStoreTracking();
+//}
+
     public void setLogListener(LogListener listener) {
         this.logListener = listener;
     }

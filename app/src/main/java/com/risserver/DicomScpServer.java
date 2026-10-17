@@ -309,6 +309,7 @@ public class DicomScpServer {
         String qAET = dicomGetString(reqBuf, 0x0040, 0x0001);
         String qDate = dicomGetString(reqBuf, 0x0040, 0x0002);
         String qTime = dicomGetString(reqBuf, 0x0040, 0x0003);
+        String qName = dicomGetString(reqBuf, 0x0010, 0x0010).replace("*", "").toUpperCase();
 
         List<String> rows = store.getCsvRowsSnapshot();
         for (int row = 1; row < rows.size(); row++) {
@@ -325,6 +326,9 @@ public class DicomScpServer {
 
             if (!qMod.isEmpty() && !qMod.equals(modality)) continue;
             if (!qAET.isEmpty() && !qAET.equals(aeTitle)) continue;
+            
+            // Name matching filter
+            if (!qName.isEmpty() && !patientName.toUpperCase().contains(qName)) continue;
 
             if (!qDate.isEmpty()) {
                 int dash = qDate.indexOf('-');
@@ -442,9 +446,16 @@ public class DicomScpServer {
         String folder = "", filename = "";
 
         try {
-            File dest = store.allocateImageFile();
-            folder = dest.getParentFile().getName();
-            filename = dest.getName();
+            File dest = store.getImageFilePath(sopInstUid);
+            if (dest != null) {
+                folder = dest.getParentFile().getName();
+                filename = dest.getName();
+                store.writeLog("C-STORE: Overwriting existing SOP: " + sopInstUid);
+            } else {
+                dest = store.allocateImageFile();
+                folder = dest.getParentFile().getName();
+                filename = dest.getName();
+            }
 
             writePart10(dest, ds, sopClassUid, sopInstUid);
 

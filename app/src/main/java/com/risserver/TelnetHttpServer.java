@@ -351,6 +351,57 @@ public class TelnetHttpServer {
                 return;
             }
 
+            if (method.equals("GET") && url.startsWith("/list?acc=")) {
+                String acc = url.substring(10);
+                List<RisDataStore.StoredImageInfo> images = store.getStoredImagesForAccession(acc);
+                StringBuilder html = new StringBuilder(HTML_START).append("<h2>Images for Accession: ").append(acc).append("</h2><ul>");
+                for (RisDataStore.StoredImageInfo img : images) {
+                    html.append("<li>").append(img.filename).append(" (").append(img.modality).append(") - ")
+                        .append("<a href='/download?sop=").append(img.sopInstanceUID).append("'>Download DICOM</a> | ")
+                        .append("<a href='/header?sop=").append(img.sopInstanceUID).append("'>View Header</a></li>");
+                }
+                html.append("</ul><br><a href='/'>Back</a>").append(HTML_END);
+                sendHttpResponse(out, "200 OK", "text/html; charset=utf-8", html.toString());
+                return;
+            }
+
+            if (method.equals("GET") && url.startsWith("/download?sop=")) {
+                String sop = url.substring(14);
+                File f = store.getImageFilePath(sop);
+                if (f != null && f.exists()) {
+                    byte[] data = java.nio.file.Files.readAllBytes(f.toPath());
+                    String hdr = "HTTP/1.1 200 OK\r\n" +
+                                 "Content-Type: application/dicom\r\n" +
+                                 "Content-Disposition: attachment; filename=\"" + f.getName() + "\"\r\n" +
+                                 "Content-Length: " + data.length + "\r\n" +
+                                 "Connection: close\r\n\r\n";
+                    out.write(hdr.getBytes(StandardCharsets.UTF_8));
+                    out.write(data);
+                    out.flush();
+                } else {
+                    sendHttpResponse(out, "404 Not Found", "text/plain", "File not found.");
+                }
+                return;
+            }
+
+            if (method.equals("GET") && url.startsWith("/header?sop=")) {
+                String sop = url.substring(12);
+                File f = store.getImageFilePath(sop);
+                if (f != null && f.exists()) {
+                    byte[] data = java.nio.file.Files.readAllBytes(f.toPath());
+                    StringBuilder sb = new StringBuilder();
+                    for (int i = 0; i < Math.min(data.length, 4096); i++) {
+                        char c = (char) data[i];
+                        if (c >= 32 && c <= 126) sb.append(c);
+                        else sb.append(".");
+                    }
+                    sendHttpResponse(out, "200 OK", "text/plain; charset=utf-8", "DICOM HEADER DUMP:\n\n" + sb.toString());
+                } else {
+                    sendHttpResponse(out, "404 Not Found", "text/plain", "File not found.");
+                }
+                return;
+            }
+
             if (method.equals("GET")) {
                 sendHttpResponse(out, "200 OK", "text/html; charset=utf-8", buildMainHtml());
                 return;
@@ -433,6 +484,19 @@ public class TelnetHttpServer {
                 sb.append(entry[fi]);
                 sb.append(isHeader ? "</th>" : "</td>");
             }
+            
+            if (isHeader) {
+                sb.append("<th>Images</th>");
+            } else {
+                String acc = entry[8];
+                int imgCount = store.getImageCountForAccession(acc);
+                if (imgCount > 0) {
+                    sb.append(String.format("<td><b>%d</b> <br><a href='/list?acc=%s'>View</a></td>", imgCount, acc));
+                } else {
+                    sb.append("<td>0</td>");
+                }
+            }
+            
             sb.append("</tr>");
         }
         sb.append("</table></div><script>formatDates();</script>");
