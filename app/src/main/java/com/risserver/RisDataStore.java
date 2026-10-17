@@ -57,6 +57,8 @@ public class RisDataStore {
         public String procCode = "";
         public String modality = "";
         public String name = "";
+        public String studyDesc = "";
+        public String spsDesc = "";
     }
 
     public static class StoredImageInfo {
@@ -108,7 +110,7 @@ public class RisDataStore {
     private final Random random = new Random();
 
     public RisDataStore(Context context) {
-        // Use App-specific folder to prevent permission failures
+        // App-specific internal storage to fix permission denied errors
         dataDir = context.getExternalFilesDir(null);
         if (dataDir == null) {
             dataDir = context.getFilesDir();
@@ -350,6 +352,20 @@ public class RisDataStore {
         notifyStatusChanged();
     }
 
+    private void deleteRecursively(File f) {
+        if (f != null && f.exists()) {
+            if (f.isDirectory()) {
+                File[] children = f.listFiles();
+                if (children != null) {
+                    for (File child : children) {
+                        deleteRecursively(child);
+                    }
+                }
+            }
+            f.delete();
+        }
+    }
+
     public synchronized void deleteAllCsvFiles() {
         File[] files = {
             new File(dataDir, "patients.csv"),
@@ -360,11 +376,24 @@ public class RisDataStore {
         for (File f : files) {
             if (f.exists()) f.delete();
         }
+        
+        File root = getStorageRoot();
+        if (root != null && root.exists()) {
+            File[] folders = root.listFiles();
+            if (folders != null) {
+                for (File f : folders) {
+                    deleteRecursively(f);
+                }
+            }
+        }
+        storageIndex = 0;
+        saveConfig();
+
         resetWorklistToHeader();
         procCodes.clear();
         procCodesLoaded = false;
         patientsCsvData = null;
-        writeLog("All CSV files deleted by user.");
+        writeLog("All CSV files and image data deleted by user.");
     }
 
     public synchronized List<String> getCsvRowsSnapshot() {
@@ -637,12 +666,27 @@ public class RisDataStore {
                 if (first) { first = false; continue; }
                 line = line.trim();
                 if (line.isEmpty()) continue;
-                String[] parts = line.split(",", 4);
+                
+                String[] p = new String[6];
+                for(int i = 0; i < 6; i++) {
+                    String val = getCsvField(line, i);
+                    p[i] = (val == null) ? "" : val.replace("\"", "");
+                }
+                
                 ProcCodeEntry pce = new ProcCodeEntry();
-                if (parts.length > 0) pce.id = parts[0].trim();
-                if (parts.length > 1) pce.procCode = parts[1].trim();
-                if (parts.length > 2) pce.modality = parts[2].trim();
-                if (parts.length > 3) pce.name = parts[3].trim();
+                pce.id = p[0];
+                pce.procCode = p[1];
+                pce.modality = p[2];
+                pce.name = p[3];
+                pce.studyDesc = p[4];
+                pce.spsDesc = p[5];
+
+                if (pce.studyDesc.isEmpty() && !pce.name.isEmpty()) {
+                    pce.studyDesc = pce.name;
+                } else if (pce.name.isEmpty() && !pce.studyDesc.isEmpty()) {
+                    pce.name = pce.studyDesc;
+                }
+
                 procCodes.add(pce);
             }
             procCodesLoaded = true;

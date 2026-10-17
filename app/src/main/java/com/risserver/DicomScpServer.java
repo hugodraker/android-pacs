@@ -405,6 +405,10 @@ public class DicomScpServer {
         sendPDataTf(out, pcId, 0x03, patchGroupLength(endCmd.toByteArray()));
     }
 
+    /**
+     * Handle C-STORE-RQ — receives and saves DICOM images
+     * Falls back to Unlinked Patient when accession is missing/empty
+     */
     private void handleCStoreRq(OutputStream out, int pcId, int msgId, byte[] ds) throws IOException {
         Map<Integer, String> el = new HashMap<>();
         walkElements(ds, 0, ds.length, false, el, 0);
@@ -417,12 +421,14 @@ public class DicomScpServer {
         String studyUid = el.getOrDefault(0x0020000D, "");
         String accNum = el.getOrDefault(0x00080050, "").trim();
 
+        // Check if accession is empty/null/whitespace
         boolean isUnlinked = accNum.isEmpty();
         String effectiveAcc = accNum;
         String effectivePatName = patName;
         String effectivePatId = patId;
 
         if (isUnlinked) {
+            // File under the shared Unlinked Images bucket for the HTTP UI
             effectiveAcc = RisDataStore.UNLINKED_ACCESSION;
             effectivePatName = RisDataStore.UNLINKED_PATIENT_NAME;
             effectivePatId = RisDataStore.UNLINKED_PATIENT_ID;
@@ -445,9 +451,10 @@ public class DicomScpServer {
                 filename = dest.getName();
             }
 
-            // Keep the exact image stream as received without touching inner tags,
-            // but encapsulate inside a valid DICOM Part 10 structure so Viewers accept it.
-            writePart10(dest, ds, sopClassUid, sopInstUid);
+            // Write exactly as received (raw byte network stream, no prepended header)
+            try (java.io.FileOutputStream fos = new java.io.FileOutputStream(dest)) {
+                fos.write(ds);
+            }
 
             java.text.SimpleDateFormat tsFmt = new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US);
             store.recordStoredImage(effectiveAcc, effectivePatName, effectivePatId, studyUid, sopInstUid,
@@ -473,65 +480,46 @@ public class DicomScpServer {
         sendPDataTf(out, pcId, 0x03, patchGroupLength(cmd.toByteArray()));
     }
 
+    /* 
+     * ========================================================================
+     * COMMENTED OUT: Header rewrites are disabled so images are stored
+     * exactly as received via network streams. 
+     * 
+     * Implementation Class UID Examples (Tag 0002,0012):
+     * - DCMTK / OFFIS:      "1.2.276.0.7230010.3.0.3.6.4"
+     * - dcm4che:            "1.2.40.0.13.1.3"
+     * - ClearCanvas:        "1.2.826.0.1.3680043.2.109.3"
+     * - OsiriX:             "1.2.276.0.7230010.3.0.3.6.1"
+     * - Merge Healthcare:   "1.2.840.113674.514.2"
+     * - Previous RIS Server:"1.2.276.0.723.1.99"
+     * ========================================================================
+     *
     private void writePart10(File dest, byte[] ds, String sopClassUid, String sopInstUid) throws IOException {
         ByteArrayOutputStream meta = new ByteArrayOutputStream();
-        
         meta.write(new byte[]{0x02, 0x00, 0x00, 0x00, 'U', 'L', 0x04, 0x00, 0x00, 0x00, 0x00, 0x00});
-        
-        writeMetaElement(meta, 0x0002, 0x0002, "UI", 
-                       (sopClassUid.isEmpty() ? "1.2.840.10008.5.1.4.1.1.2" : sopClassUid).getBytes(StandardCharsets.US_ASCII));
-        
-        writeMetaElement(meta, 0x0002, 0x0003, "UI", 
-                       (sopInstUid.isEmpty() ? "1.2.840.10008.1.2.0" : sopInstUid).getBytes(StandardCharsets.US_ASCII));
-        
-        writeMetaElement(meta, 0x0002, 0x0010, "UI", 
-                       "1.2.840.10008.1.2".getBytes(StandardCharsets.US_ASCII));
-        
-        /* 
-         * Implementation Class UID Examples (Tag 0002,0012):
-         * - DCMTK / OFFIS:      "1.2.276.0.7230010.3.0.3.6.4"
-         * - dcm4che:            "1.2.40.0.13.1.3"
-         * - ClearCanvas:        "1.2.826.0.1.3680043.2.109.3"
-         * - OsiriX:             "1.2.276.0.7230010.3.0.3.6.1"
-         * - Merge Healthcare:   "1.2.840.113674.514.2"
-         */
-        writeMetaElement(meta, 0x0002, 0x0012, "UI", 
-                       "1.2.276.0.723.1.99".getBytes(StandardCharsets.US_ASCII));
-
+        writeMetaElement(meta, 0x0002, 0x0002, "UI", (sopClassUid.isEmpty() ? "1.2.840.10008.5.1.4.1.1.2" : sopClassUid).getBytes(StandardCharsets.US_ASCII));
+        writeMetaElement(meta, 0x0002, 0x0003, "UI", (sopInstUid.isEmpty() ? "1.2.840.10008.1.2.0" : sopInstUid).getBytes(StandardCharsets.US_ASCII));
+        writeMetaElement(meta, 0x0002, 0x0010, "UI", "1.2.840.10008.1.2".getBytes(StandardCharsets.US_ASCII));
+        writeMetaElement(meta, 0x0002, 0x0012, "UI", "1.2.276.0.723.1.99".getBytes(StandardCharsets.US_ASCII));
         byte[] m = meta.toByteArray();
         int gl = m.length - 12;
-        m[8] = (byte)(gl & 0xFF);
-        m[9] = (byte)((gl >> 8) & 0xFF);
-        m[10] = (byte)((gl >> 16) & 0xFF);
-        m[11] = (byte)((gl >> 24) & 0xFF);
-
-        try (FileOutputStream fos = new FileOutputStream(dest)) {
+        m[8] = (byte)(gl & 0xFF); m[9] = (byte)((gl >> 8) & 0xFF); m[10] = (byte)((gl >> 16) & 0xFF); m[11] = (byte)((gl >> 24) & 0xFF);
+        try (java.io.FileOutputStream fos = new java.io.FileOutputStream(dest)) {
             byte[] preamble = new byte[128];
-            fos.write(preamble);
-            fos.write("DICM".getBytes(StandardCharsets.US_ASCII));
-            fos.write(m);
-            fos.write(ds);
+            fos.write(preamble); fos.write("DICM".getBytes(StandardCharsets.US_ASCII)); fos.write(m); fos.write(ds);
         }
     }
 
     private void writeMetaElement(ByteArrayOutputStream out, int g, int e, String vr, byte[] v) {
-        out.write(g & 0xFF); out.write((g >> 8) & 0xFF);
-        out.write(e & 0xFF); out.write((e >> 8) & 0xFF);
+        out.write(g & 0xFF); out.write((g >> 8) & 0xFF); out.write(e & 0xFF); out.write((e >> 8) & 0xFF);
         out.write(vr.charAt(0)); out.write(vr.charAt(1));
-        
-        int pad = v.length % 2; 
-        int totalLen = v.length + pad;
-
+        int pad = v.length % 2; int totalLen = v.length + pad;
         if (LONG_VRS.contains(vr)) {
-            out.write(0); out.write(0); 
-            out.write(totalLen & 0xFF); out.write((totalLen >> 8) & 0xFF);
-            out.write((totalLen >> 16) & 0xFF); out.write((totalLen >> 24) & 0xFF);
-        } else {
-            out.write(totalLen & 0xFF); out.write((totalLen >> 8) & 0xFF);
-        }
-        out.write(v, 0, v.length);
-        if (pad == 1) out.write(0); 
+            out.write(0); out.write(0); out.write(totalLen & 0xFF); out.write((totalLen >> 8) & 0xFF); out.write((totalLen >> 16) & 0xFF); out.write((totalLen >> 24) & 0xFF);
+        } else { out.write(totalLen & 0xFF); out.write((totalLen >> 8) & 0xFF); }
+        out.write(v, 0, v.length); if (pad == 1) out.write(0); 
     }
+    */
 
     public static boolean patchTagInPlace(byte[] buf, int g, int e, String newValue) {
         if (newValue == null || newValue.isEmpty()) return false;

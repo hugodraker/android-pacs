@@ -47,17 +47,21 @@ public class TelnetHttpServer {
             "window.maxAcc=window.maxAcc||0;" +
             "function nxtA(){var t=document.getElementById('pTable'),m=0,p='ACC',c=5;if(t){for(var i=1;i<t.rows.length;i++){var v=t.rows[i].cells[8].innerText||'',mt=v.match(/([^0-9]*)([0-9]+)/);if(mt){p=mt[1];var val=parseInt(mt[2],10);if(val>m){m=val;c=mt[2].length;}}}}if(window.maxAcc<=m)window.maxAcc=m;window.maxAcc++;document.getElementsByName('Accession')[0].value=p+String(window.maxAcc).padStart(c,'0');}" +
             "function sendMan(){var a=document.getElementsByName('Accession')[0].value.trim();if(!a){alert('Accession number is required!');return false;}" +
+            "var pd=document.getElementsByName('ProcDesc')[0]; var sd=document.getElementsByName('StudyDesc')[0];" +
+            "if(pd&&sd){ if(!pd.value&&sd.value)pd.value=sd.value; else if(!sd.value&&pd.value)sd.value=pd.value; }" +
             "var sel=document.getElementById('procCodeSel');var opts=[];if(sel){for(var j=0;j<sel.options.length;j++){if(sel.options[j].selected&&sel.options[j].value!=='')opts.push(sel.options[j]);}}" +
             "if(opts.length>1){var p=[];for(var k=0;k<opts.length;k++){nxtA();" +
             "document.getElementsByName('Modality')[0].value=opts[k].getAttribute('data-mod')||'';" +
-            "document.getElementsByName('ProcDesc')[0].value=opts[k].text||'';" +
+            "var nVal=opts[k].getAttribute('data-name')||''; var sdVal=opts[k].getAttribute('data-studydesc')||'';" +
+            "if(!nVal&&sdVal)nVal=sdVal; else if(!sdVal&&nVal)sdVal=nVal;" +
+            "document.getElementsByName('ProcDesc')[0].value=nVal;" +
+            "document.getElementsByName('StudyDesc')[0].value=sdVal;" +
             "document.getElementsByName('ProcID')[0].value=opts[k].getAttribute('data-id')||'';" +
             "document.getElementsByName('SPSID')[0].value=opts[k].getAttribute('data-code')||'';" +
+            "document.getElementsByName('SPSDesc')[0].value=opts[k].getAttribute('data-spsdesc')||'';" +
             "document.getElementsByName('StationAE')[0].value='';" +
-            "document.getElementsByName('SPSDesc')[0].value='';" +
             "var sn=document.getElementsByName('StationName')[0];if(sn)sn.value='';" +
             "document.getElementsByName('Location')[0].value='';" +
-            "document.getElementsByName('StudyDesc')[0].value='';" +
             "var c=[];for(var i=0;i<fnames.length;i++){var el=document.getElementsByName(fnames[i])[0];var v=el?el.value:'';if(v.indexOf(',')>-1||v.indexOf('\"')>-1)v='\"'+v.replace(new RegExp('\"','g'),'\"\"')+'\"';c.push(v);}" +
             "p.push(fetch('/manual',{method:'POST',body:c.join(',')}));}Promise.all(p).then(function(){window.location.href='/';});return false;}" +
             "var c=[];for(var i=0;i<fnames.length;i++){var el=document.getElementsByName(fnames[i])[0];var v=el?el.value:'';if(v.indexOf(',')>-1||v.indexOf('\"')>-1)v='\"'+v.replace(new RegExp('\"','g'),'\"\"')+'\"';c.push(v);}fetch('/manual',{method:'POST',body:c.join(',')}).then(function(){window.location.href='/';});return false;}" +
@@ -70,10 +74,14 @@ public class TelnetHttpServer {
             "var tm=c[13].innerText;if(tm.length===6)c[13].innerText=tm.substr(0,2)+':'+tm.substr(2,2);" +
             "}}}" +
             "function newPatient(){for(var i=0;i<fnames.length;i++){var el=document.getElementsByName(fnames[i])[0];if(el)el.value='';}var d=new Date(),y=d.getFullYear(),mo=('0'+(d.getMonth()+1)).slice(-2),da=('0'+d.getDate()).slice(-2);var sd=document.getElementsByName('StartDate')[0];if(sd)sd.value=y+'-'+mo+'-'+da;nxtA();var su=document.getElementsByName('StudyUID')[0];if(su){var sec=Math.floor(Date.now()/1000);var rnd=Math.floor(Math.random()*10000);su.value='1.2.840.113619.2.1.'+sec+'.'+rnd;}var stat=document.getElementsByName('Status')[0];if(stat)stat.value='1';var pri=document.getElementsByName('Priority')[0];if(pri)pri.value='LOW';var tm=document.getElementsByName('StartTime')[0];if(tm)tm.value='16:00';}" +
-            "function loadProcCode(){var sel=document.getElementById('procCodeSel');if(sel&&sel.selectedIndex>=0){var idx=sel.selectedIndex;" +
-            "var id=document.getElementsByName('ProcID')[0];var code=document.getElementsByName('SPSID')[0];var mod=document.getElementsByName('Modality')[0];var desc=document.getElementsByName('ProcDesc')[0];" +
-            "if(id&&code&&mod&&desc){id.value=sel.options[idx].getAttribute('data-id')||'';code.value=sel.options[idx].getAttribute('data-code')||'';mod.value=sel.options[idx].getAttribute('data-mod')||'';desc.value=sel.options[idx].text;}}" +
-            "}" +
+            "function loadProcCode(){var sel=document.getElementById('procCodeSel');if(sel&&sel.selectedIndex>=0){var opt=sel.options[sel.selectedIndex];" +
+            "var id=document.getElementsByName('ProcID')[0];var code=document.getElementsByName('SPSID')[0];var mod=document.getElementsByName('Modality')[0];" +
+            "var desc=document.getElementsByName('ProcDesc')[0];var stDesc=document.getElementsByName('StudyDesc')[0];var spsDesc=document.getElementsByName('SPSDesc')[0];" +
+            "if(id)id.value=opt.getAttribute('data-id')||''; if(code)code.value=opt.getAttribute('data-code')||''; if(mod)mod.value=opt.getAttribute('data-mod')||'';" +
+            "var nVal=opt.getAttribute('data-name')||''; var sdVal=opt.getAttribute('data-studydesc')||'';" +
+            "if(!nVal&&sdVal)nVal=sdVal; else if(!sdVal&&nVal)sdVal=nVal;" +
+            "if(desc)desc.value=nVal; if(stDesc)stDesc.value=sdVal; if(spsDesc)spsDesc.value=opt.getAttribute('data-spsdesc')||'';" +
+            "}}" +
             "function filterProcCodes(){var i,f=document.getElementById('procFilter').value.toUpperCase(),s=document.getElementById('procCodeSel'),o=s.options;for(i=0;i<o.length;i++){if((o[i].text||o[i].innerText).toUpperCase().indexOf(f)>-1){o[i].style.display='';}else{o[i].style.display='none';o[i].selected=false;}}}" +
             "let ptDebounce=null;let ptAbort=null;" +
             "function filterPatients(){" +
@@ -257,7 +265,6 @@ public class TelnetHttpServer {
         }
     }
 
-    // Extractor now strictly uses proper multipart boundaries
     private String extractMultipartField(String bodyStr, String fieldName, String boundary) {
         String search = "name=\"" + fieldName + "\"";
         int idx = bodyStr.indexOf(search);
@@ -335,6 +342,55 @@ public class TelnetHttpServer {
             String[] parts = firstLine.split(" ");
             String method = parts.length > 0 ? parts[0] : "GET";
             String url = parts.length > 1 ? parts[1] : "/";
+
+            // Verify authentication cookie for all /settings routes
+            boolean hasAuth = false;
+            for (String hLine : headerStr.split("\r\n")) {
+                if (hLine.toLowerCase().startsWith("cookie:")) {
+                    String cks = hLine.substring(7).trim();
+                    for (String c : cks.split(";")) {
+                        if (c.trim().equals("risAuth=" + store.delPwd)) {
+                            hasAuth = true;
+                        }
+                    }
+                }
+            }
+
+            if (url.equals("/settings/login") && method.equals("POST")) {
+                String inputPwd = extractMultipartField(bodyStr, "pwd", boundary);
+                if (inputPwd == null) {
+                    int pwdIdx = bodyStr.indexOf("pwd=");
+                    if (pwdIdx >= 0) {
+                        String sub = bodyStr.substring(pwdIdx + 4);
+                        int amp = sub.indexOf('&');
+                        if (amp >= 0) sub = sub.substring(0, amp);
+                        inputPwd = URLDecoder.decode(sub.trim(), "UTF-8");
+                    }
+                }
+                if (inputPwd != null && inputPwd.equals(store.delPwd)) {
+                    String hdr = "HTTP/1.1 302 Found\r\n" +
+                                 "Location: /settings\r\n" +
+                                 "Set-Cookie: risAuth=" + store.delPwd + "; Path=/; Max-Age=86400\r\n" +
+                                 "Connection: close\r\n\r\n";
+                    out.write(hdr.getBytes(StandardCharsets.UTF_8));
+                    out.flush();
+                } else {
+                    sendHttpResponse(out, "200 OK", "text/html; charset=utf-8",
+                            HTML_START + "<meta http-equiv='refresh' content='2; url=/settings' /><h2>Invalid Password!</h2>" + HTML_END);
+                }
+                return;
+            }
+
+            if (url.startsWith("/settings") && !hasAuth) {
+                String loginHtml = HTML_START + "<h2>Settings Login</h2>" +
+                                   "<div class='query-box'>" +
+                                   "<form method='POST' action='/settings/login'>" +
+                                   "<input type='password' name='pwd' placeholder='Password' required> " +
+                                   "<input type='submit' value='Login' class='top-btn bg-blue'>" +
+                                   "</form></div><br><a href='/' style='color:#2196F3; font-weight:bold; text-decoration:none;'>Back to Worklist</a>" + HTML_END;
+                sendHttpResponse(out, "200 OK", "text/html; charset=utf-8", loginHtml);
+                return;
+            }
 
             if (method.equals("GET") && url.startsWith("/api/patient/")) {
                 String rawName = url.substring(13);
@@ -437,6 +493,32 @@ public class TelnetHttpServer {
             }
 
             if (method.equals("POST")) {
+                if (url.equals("/settings/update_pwd")) {
+                    String newPwd = extractMultipartField(bodyStr, "newPwd", boundary);
+                    if (newPwd == null) {
+                        int pwdIdx = bodyStr.indexOf("newPwd=");
+                        if (pwdIdx >= 0) {
+                            String sub = bodyStr.substring(pwdIdx + 7);
+                            int amp = sub.indexOf('&');
+                            if (amp >= 0) sub = sub.substring(0, amp);
+                            newPwd = URLDecoder.decode(sub.trim(), "UTF-8");
+                        }
+                    }
+                    if (newPwd != null && !newPwd.trim().isEmpty()) {
+                        store.delPwd = newPwd.trim();
+                        store.saveConfig();
+                        String hdr = "HTTP/1.1 302 Found\r\n" +
+                                     "Location: /settings\r\n" +
+                                     "Set-Cookie: risAuth=" + store.delPwd + "; Path=/; Max-Age=86400\r\n" +
+                                     "Connection: close\r\n\r\n";
+                        out.write(hdr.getBytes(StandardCharsets.UTF_8));
+                        out.flush();
+                    } else {
+                        sendHttpResponse(out, "200 OK", "text/html; charset=utf-8", HTML_START + "<meta http-equiv='refresh' content='2; url=/settings' /><h2>Password cannot be empty</h2>" + HTML_END);
+                    }
+                    return;
+                }
+
                 if (url.equals("/settings/update_folders")) {
                     String[] params = bodyStr.split("&");
                     for (String p : params) {
@@ -505,31 +587,6 @@ public class TelnetHttpServer {
                     String[] entry = RisDataStore.parseCsvLineToEntry(bodyStr.trim());
                     if (RisDataStore.validateEntry(entry)) {
                         store.normalizeAndUpsertEntry(entry);
-                        
-                        List<RisDataStore.StoredImageInfo> images = store.getStoredImagesForAccession(entry[8]);
-                        for (RisDataStore.StoredImageInfo img : images) {
-                            File f = store.getImageFilePath(img.sopInstanceUID);
-                            if (f != null && f.exists()) {
-                                try {
-                                    byte[] fileBytes = java.nio.file.Files.readAllBytes(f.toPath());
-                                    boolean changed = false;
-                                    changed |= DicomScpServer.patchTagInPlace(fileBytes, 0x0010, 0x0010, entry[0]); 
-                                    changed |= DicomScpServer.patchTagInPlace(fileBytes, 0x0010, 0x0020, entry[1]); 
-                                    changed |= DicomScpServer.patchTagInPlace(fileBytes, 0x0010, 0x0030, entry[2]); 
-                                    changed |= DicomScpServer.patchTagInPlace(fileBytes, 0x0010, 0x0040, entry[3]); 
-                                    changed |= DicomScpServer.patchTagInPlace(fileBytes, 0x0008, 0x0050, entry[8]); 
-                                    changed |= DicomScpServer.patchTagInPlace(fileBytes, 0x0008, 0x1030, entry[22]);
-                                    changed |= DicomScpServer.patchTagInPlace(fileBytes, 0x0008, 0x0060, entry[20]);
-                                    
-                                    if (changed) {
-                                        try (java.io.FileOutputStream fos = new java.io.FileOutputStream(f)) {
-                                            fos.write(fileBytes);
-                                        }
-                                        store.writeLog("Retroactively patched DICOM file tags: " + f.getName());
-                                    }
-                                } catch (Exception ignored) {}
-                            }
-                        }
                     }
                 }
 
@@ -550,6 +607,12 @@ public class TelnetHttpServer {
     private String buildSettingsHtml() {
         return HTML_START + 
             "<h2>Settings Panel</h2>" +
+            "<div class='query-box'>" +
+            "<h3>System Password</h3>" +
+            "<form action='/settings/update_pwd' method='POST'>" +
+            "New Password: <input type='text' name='newPwd' value='" + escapeJs(store.delPwd) + "'> " +
+            "<input type='submit' value='Update Password' class='top-btn bg-green'>" +
+            "</form></div>" +
             "<div class='query-box'>" +
             "<h3>Storage Settings</h3>" +
             "<form action='/settings/update_folders' method='POST'>" +
@@ -588,7 +651,7 @@ public class TelnetHttpServer {
             "<input type='file' name='file' required class='top-btn bg-blue' style='width:auto;'> " +
             "<input type='submit' value='Upload c-store.csv' class='top-btn bg-red'>" +
             "</form></div>" +
-            "<br><a href='/' style='color:#2196F3; font-weight:bold; font-size:16px; margin-left:20px;'>Back to Worklist</a>" +
+            "<br><a href='/' style='color:#2196F3; font-weight:bold; font-size:16px; margin-left:20px; text-decoration:none;'>Back to Worklist</a>" +
             HTML_END;
     }
 
@@ -653,11 +716,15 @@ public class TelnetHttpServer {
 
         if (store.procCodesLoaded) {
             for (RisDataStore.ProcCodeEntry pc : store.procCodes) {
-                sb.append("<option value='").append(pc.id)
-                  .append("' data-id='").append(pc.id)
-                  .append("' data-code='").append(pc.procCode)
-                  .append("' data-mod='").append(pc.modality).append("'>")
-                  .append(pc.name).append("</option>");
+                sb.append("<option value='").append(escapeJs(pc.id))
+                  .append("' data-id='").append(escapeJs(pc.id))
+                  .append("' data-code='").append(escapeJs(pc.procCode))
+                  .append("' data-mod='").append(escapeJs(pc.modality))
+                  .append("' data-name='").append(escapeJs(pc.name))
+                  .append("' data-studydesc='").append(escapeJs(pc.studyDesc))
+                  .append("' data-spsdesc='").append(escapeJs(pc.spsDesc))
+                  .append("'>")
+                  .append(escapeJs(pc.name)).append("</option>");
             }
         }
         sb.append("</select></div></div>");
@@ -691,23 +758,26 @@ public class TelnetHttpServer {
             }
             sb.append("]; function updLoc(val) { var r = rData.find(function(x) { return x.room === val; });" +
                       "if(r) { " +
-                      "document.getElementsByName('StationName')[0].value=r.name; " +
-                      "document.getElementsByName('StationAE')[0].value=r.ae; " +
-                      "document.getElementsByName('Modality')[0].value=r.mod; " +
+                      "var sn = document.getElementsByName('StationName')[0]; " +
+                      "var sae = document.getElementsByName('StationAE')[0]; " +
+                      "var mod = document.getElementsByName('Modality')[0]; " +
+                      "if(sn) sn.value=r.name; " +
+                      "if(sae) sae.value=r.ae; " +
+                      "if(mod) mod.value=r.mod; " +
                       "} }</script>");
 
             for (String[] r : rList) {
-                sb.append("<option value=\"").append(r[5]).append("\">"); // Room mapping
+                sb.append("<option value=\"").append(escapeJs(r[5])).append("\">"); 
             }
             sb.append("</datalist>");
             
             for (String[] r : rList) {
-                sb.append("<option value=\"").append(r[4]).append("\">"); // StationName mapping
+                sb.append("<option value=\"").append(escapeJs(r[4])).append("\">"); 
             }
             sb.append("</datalist>");
             
             for (String[] r : rList) {
-                sb.append("<option value=\"").append(r[2]).append("\">"); // Modality mapping
+                sb.append("<option value=\"").append(escapeJs(r[2])).append("\">"); 
             }
             sb.append("</datalist>");
         } else {
@@ -716,7 +786,7 @@ public class TelnetHttpServer {
         }
 
         sb.append("<input type='text' name='StationName' list='stNameList' placeholder='Station Name'> ");
-        sb.append("<input type='text' name='Location' list='roomList' onchange='updLoc(this.value)' oninput='updLoc(this.value)' placeholder='Location'> ");
+        sb.append("<input type='text' name='Location' list='roomList' oninput='updLoc(this.value)' onchange='updLoc(this.value)' placeholder='Location'> ");
         
         sb.append(" <select name='Status'><option value='0'>NONE</option><option value='1' selected>SCHEDULED</option><option value='2'>ARRIVED</option><option value='3'>READY</option><option value='4'>STARTED</option><option value='5'>DEPARTED</option></select><br>");
         sb.append("<input type='text' name='Modality' list='modList' placeholder='Modality'> ");
