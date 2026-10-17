@@ -15,6 +15,7 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
+import android.content.Context;
 import android.content.Intent;
 import android.os.Binder;
 import android.os.Build;
@@ -81,7 +82,7 @@ public class RisServerService extends Service {
     }
 
     public void updateNotification() {
-        NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+        NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
         if (nm != null) {
             String status = serverRunning
                     ? String.format("Running | HTTP:%d DICOM:%d Telnet:%d",
@@ -93,28 +94,43 @@ public class RisServerService extends Service {
 
     private Notification buildNotification(String contentText) {
         Intent notificationIntent = new Intent(this, MainActivity.class);
-        PendingIntent pendingIntent = PendingIntent.getActivity(
-                this, 0, notificationIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        
+        int flags = PendingIntent.FLAG_UPDATE_CURRENT;
+        if (Build.VERSION.SDK_INT >= 23) {
+            flags |= PendingIntent.FLAG_IMMUTABLE; // Set required modern flag if running on newer API
+        }
+        
+        PendingIntent pendingIntent = PendingIntent.getActivity(this, 0, notificationIntent, flags);
 
-        Notification.Builder builder = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
-                ? new Notification.Builder(this, CHANNEL_ID)
-                : new Notification.Builder(this);
+        // Fallback architecture to allow SDK 34 compile but work flawlessly on SDK 9 runtime
+        if (Build.VERSION.SDK_INT >= 11) {
+            Notification.Builder builder = Build.VERSION.SDK_INT >= 26
+                    ? new Notification.Builder(this, CHANNEL_ID)
+                    : new Notification.Builder(this);
 
-        return builder
-                .setContentTitle("RIS Multi-Protocol Server")
-                .setContentText(contentText)
-                .setSmallIcon(android.R.drawable.stat_sys_upload_done)
-                .setContentIntent(pendingIntent)
-                .setOngoing(true)
-                .build();
+            builder.setContentTitle("RIS Multi-Protocol Server")
+                    .setContentText(contentText)
+                    .setSmallIcon(android.R.drawable.stat_sys_upload_done)
+                    .setContentIntent(pendingIntent)
+                    .setOngoing(true);
+            return Build.VERSION.SDK_INT >= 16 ? builder.build() : builder.getNotification();
+        } else {
+            // Android 2.3 Legacy Notification System
+            Notification notification = new Notification(android.R.drawable.stat_sys_upload_done, "Starting...", System.currentTimeMillis());
+            try {
+                java.lang.reflect.Method m = notification.getClass().getMethod("setLatestEventInfo", Context.class, CharSequence.class, CharSequence.class, PendingIntent.class);
+                m.invoke(notification, this, "RIS Multi-Protocol Server", contentText, pendingIntent);
+            } catch (Exception e) {}
+            notification.flags |= Notification.FLAG_ONGOING_EVENT;
+            return notification;
+        }
     }
 
     private void createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        if (Build.VERSION.SDK_INT >= 26) {
             NotificationChannel channel = new NotificationChannel(
                     CHANNEL_ID, "RIS Server Status", NotificationManager.IMPORTANCE_LOW);
-            NotificationManager manager = getSystemService(NotificationManager.class);
+            NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
             if (manager != null) manager.createNotificationChannel(channel);
         }
     }

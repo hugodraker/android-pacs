@@ -13,6 +13,7 @@ package com.hugo.risserver;
 import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileReader;
 import java.io.IOException;
 import java.io.InputStream;
@@ -24,13 +25,14 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
 import java.net.URLDecoder;
-import java.nio.charset.StandardCharsets;
+import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
-public class TelnetHttpServer {private final RisDataStore store;
+public class TelnetHttpServer {
+    private final RisDataStore store;
     private ServerSocket telnetServerSocket;
     private ServerSocket httpServerSocket;
     private volatile boolean running = false;
@@ -134,14 +136,35 @@ public class TelnetHttpServer {private final RisDataStore store;
 
     public void start() {
         running = true;
-        new Thread(this::telnetAcceptLoop, "TelnetAcceptThread").start();
-        new Thread(this::httpAcceptLoop, "HttpAcceptThread").start();
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                telnetAcceptLoop();
+            }
+        }, "TelnetAcceptThread").start();
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                httpAcceptLoop();
+            }
+        }, "HttpAcceptThread").start();
     }
 
     public void stop() {
         running = false;
         try { if (telnetServerSocket != null) telnetServerSocket.close(); } catch (IOException ignored) {}
         try { if (httpServerSocket != null) httpServerSocket.close(); } catch (IOException ignored) {}
+    }
+
+    private byte[] readAllBytes(File file) throws IOException {
+        byte[] data = new byte[(int) file.length()];
+        FileInputStream fis = new FileInputStream(file);
+        try {
+            fis.read(data);
+        } finally {
+            fis.close();
+        }
+        return data;
     }
 
     // ===== Telnet Server =====
@@ -165,9 +188,14 @@ public class TelnetHttpServer {private final RisDataStore store;
             store.notifyStatusChanged();
 
             while (running && !telnetServerSocket.isClosed()) {
-                Socket client = telnetServerSocket.accept();
+                final Socket client = telnetServerSocket.accept();
                 store.writeLog("Telnet Client connected (" + client.getRemoteSocketAddress() + ")");
-                new Thread(() -> handleTelnetClient(client), "TelnetClientWorker").start();
+                new Thread(new Runnable() {
+                    @Override
+                    public void run() {
+                        handleTelnetClient(client);
+                    }
+                }, "TelnetClientWorker").start();
             }
         } catch (IOException e) {
             if (running) store.writeLog("ERROR: Failed to listen on Telnet port " + store.telnetPort);
@@ -178,9 +206,9 @@ public class TelnetHttpServer {private final RisDataStore store;
         try {
             client.setSoTimeout(Math.max(1, store.telnetTimeout) * 1000);
             OutputStream out = client.getOutputStream();
-            BufferedReader reader = new BufferedReader(new InputStreamReader(client.getInputStream(), StandardCharsets.UTF_8));
+            BufferedReader reader = new BufferedReader(new InputStreamReader(client.getInputStream(), Charset.forName("UTF-8")));
 
-            out.write("Connected to RIS Telnet Server. Waiting for data...\r\n".getBytes(StandardCharsets.UTF_8));
+            out.write("Connected to RIS Telnet Server. Waiting for data...\r\n".getBytes(Charset.forName("UTF-8")));
             out.flush();
 
             String line;
@@ -199,24 +227,24 @@ public class TelnetHttpServer {private final RisDataStore store;
                     for (int i = 1; i < rows.size(); i++) {
                         String rowStr = rows.get(i);
                         if (lineMatchesDisp(rowStr, param)) {
-                            out.write((rowStr + "\r\n").getBytes(StandardCharsets.UTF_8));
+                            out.write((rowStr + "\r\n").getBytes(Charset.forName("UTF-8")));
                             count++;
                         }
                     }
-                    out.write((count + " RESULTS\r\n").getBytes(StandardCharsets.UTF_8));
+                    out.write((count + " RESULTS\r\n").getBytes(Charset.forName("UTF-8")));
                     out.flush();
                 } else {
                     String[] entry = RisDataStore.parseCsvLineToEntry(pLine);
                     if (!RisDataStore.validateEntry(entry)) {
-                        out.write("INVALID LINE\r\n".getBytes(StandardCharsets.UTF_8));
+                        out.write("INVALID LINE\r\n".getBytes(Charset.forName("UTF-8")));
                         out.flush();
                     } else {
                         boolean updated = store.normalizeAndUpsertEntry(entry);
                         if (updated) {
-                            out.write("UPDATED\r\n".getBytes(StandardCharsets.UTF_8));
+                            out.write("UPDATED\r\n".getBytes(Charset.forName("UTF-8")));
                             store.writeLog("UPDATED Accession " + entry[8]);
                         } else {
-                            out.write("INSERTED\r\n".getBytes(StandardCharsets.UTF_8));
+                            out.write("INSERTED\r\n".getBytes(Charset.forName("UTF-8")));
                             store.writeLog("INSERTED Accession " + entry[8]);
                         }
                         out.flush();
@@ -260,8 +288,13 @@ public class TelnetHttpServer {private final RisDataStore store;
             store.notifyStatusChanged();
 
             while (running && !httpServerSocket.isClosed()) {
-                Socket client = httpServerSocket.accept();
-                new Thread(() -> handleHttpClient(client), "HttpClientWorker").start();
+                final Socket client = httpServerSocket.accept();
+                new Thread(new Runnable() {
+                    @Override
+                    public void run() {
+                        handleHttpClient(client);
+                    }
+                }, "HttpClientWorker").start();
             }
         } catch (IOException e) {
             if (running) store.writeLog("ERROR: Failed to listen on HTTP port " + store.httpPort);
@@ -311,7 +344,7 @@ public class TelnetHttpServer {private final RisDataStore store;
                 if (headerEnd < 0) {
                     headerEnd = findHeaderEnd(current);
                     if (headerEnd >= 0) {
-                        String hdrStr = new String(current, 0, headerEnd, StandardCharsets.UTF_8);
+                        String hdrStr = new String(current, 0, headerEnd, Charset.forName("UTF-8"));
                         for (String hLine : hdrStr.split("\r\n")) {
                             if (hLine.toLowerCase().startsWith("content-length:")) {
                                 try {
@@ -329,8 +362,8 @@ public class TelnetHttpServer {private final RisDataStore store;
             if (headerEnd < 0) return;
 
             byte[] fullReqBytes = reqBuf.toByteArray();
-            String headerStr = new String(fullReqBytes, 0, headerEnd, StandardCharsets.UTF_8);
-            String bodyStr = new String(fullReqBytes, headerEnd + 4, fullReqBytes.length - (headerEnd + 4), StandardCharsets.UTF_8);
+            String headerStr = new String(fullReqBytes, 0, headerEnd, Charset.forName("UTF-8"));
+            String bodyStr = new String(fullReqBytes, headerEnd + 4, fullReqBytes.length - (headerEnd + 4), Charset.forName("UTF-8"));
 
             String boundary = null;
             for (String hLine : headerStr.split("\r\n")) {
@@ -374,7 +407,7 @@ public class TelnetHttpServer {private final RisDataStore store;
                                  "Location: /settings\r\n" +
                                  "Set-Cookie: risAuth=" + store.delPwd + "; Path=/; Max-Age=86400\r\n" +
                                  "Connection: close\r\n\r\n";
-                    out.write(hdr.getBytes(StandardCharsets.UTF_8));
+                    out.write(hdr.getBytes(Charset.forName("UTF-8")));
                     out.flush();
                 } else {
                     sendHttpResponse(out, "200 OK", "text/html; charset=utf-8",
@@ -426,13 +459,13 @@ public class TelnetHttpServer {private final RisDataStore store;
                 String sop = url.substring(14);
                 File f = store.getImageFilePath(sop);
                 if (f != null && f.exists()) {
-                    byte[] data = java.nio.file.Files.readAllBytes(f.toPath());
+                    byte[] data = readAllBytes(f);
                     String hdr = "HTTP/1.1 200 OK\r\n" +
                                  "Content-Type: application/dicom\r\n" +
                                  "Content-Disposition: attachment; filename=\"" + f.getName() + ".dcm\"\r\n" +
                                  "Content-Length: " + data.length + "\r\n" +
                                  "Connection: close\r\n\r\n";
-                    out.write(hdr.getBytes(StandardCharsets.UTF_8));
+                    out.write(hdr.getBytes(Charset.forName("UTF-8")));
                     out.write(data);
                     out.flush();
                 } else {
@@ -445,7 +478,7 @@ public class TelnetHttpServer {private final RisDataStore store;
                 String sop = url.substring(12);
                 File f = store.getImageFilePath(sop);
                 if (f != null && f.exists()) {
-                    byte[] data = java.nio.file.Files.readAllBytes(f.toPath());
+                    byte[] data = readAllBytes(f);
                     StringBuilder sb = new StringBuilder();
                     for (int i = 0; i < Math.min(data.length, 4096); i++) {
                         char c = (char) data[i];
@@ -473,13 +506,13 @@ public class TelnetHttpServer {private final RisDataStore store;
                 } else {
                      File f = new File(store.dataDir, fileReq);
                      if (f.exists()) {
-                         byte[] data = java.nio.file.Files.readAllBytes(f.toPath());
+                         byte[] data = readAllBytes(f);
                          String hdr = "HTTP/1.1 200 OK\r\n" +
                                       "Content-Type: text/csv\r\n" +
                                       "Content-Disposition: attachment; filename=\"" + f.getName() + "\"\r\n" +
                                       "Content-Length: " + data.length + "\r\n" +
                                       "Connection: close\r\n\r\n";
-                         out.write(hdr.getBytes(StandardCharsets.UTF_8));
+                         out.write(hdr.getBytes(Charset.forName("UTF-8")));
                          out.write(data);
                          out.flush();
                      } else {
@@ -513,7 +546,7 @@ public class TelnetHttpServer {private final RisDataStore store;
                                      "Location: /settings\r\n" +
                                      "Set-Cookie: risAuth=" + store.delPwd + "; Path=/; Max-Age=86400\r\n" +
                                      "Connection: close\r\n\r\n";
-                        out.write(hdr.getBytes(StandardCharsets.UTF_8));
+                        out.write(hdr.getBytes(Charset.forName("UTF-8")));
                         out.flush();
                     } else {
                         sendHttpResponse(out, "200 OK", "text/html; charset=utf-8", HTML_START + "<meta http-equiv='refresh' content='2; url=/settings' /><h2>Password cannot be empty</h2>" + HTML_END);
@@ -573,8 +606,11 @@ public class TelnetHttpServer {private final RisDataStore store;
                             }
                         } else {
                             File outF = new File(store.dataDir, csvType);
-                            try (java.io.FileWriter fw = new java.io.FileWriter(outF)) {
+                            java.io.FileWriter fw = new java.io.FileWriter(outF);
+                            try {
                                 fw.write(fileData.trim());
+                            } finally {
+                                fw.close();
                             }
                             if (csvType.equals("pcodes.csv")) store.loadProcedureCodes();
                         }
@@ -751,7 +787,9 @@ public class TelnetHttpServer {private final RisDataStore store;
         sb.append("<datalist id='modList'>");
         if (roomsFile.exists()) {
             List<String[]> rList = new ArrayList<>();
-            try (BufferedReader br = new BufferedReader(new FileReader(roomsFile))) {
+            BufferedReader br = null;
+            try {
+                br = new BufferedReader(new FileReader(roomsFile));
                 String line;
                 boolean isHeader = true;
                 while ((line = br.readLine()) != null && rList.size() < 64) {
@@ -764,7 +802,10 @@ public class TelnetHttpServer {private final RisDataStore store;
                     }
                     rList.add(item);
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception ignored) {
+            } finally {
+                if (br != null) try { br.close(); } catch (Exception e) {}
+            }
 
             sb.append("<script>var rData = [");
             Set<String> roomSet = new HashSet<>();
@@ -820,13 +861,14 @@ public class TelnetHttpServer {private final RisDataStore store;
         sb.append(HTML_END);
         return sb.toString();
     }
-private void sendHttpResponse(OutputStream out, String status, String contentType, String body) throws IOException {
-        byte[] bodyBytes = body.getBytes(StandardCharsets.UTF_8);
+
+    private void sendHttpResponse(OutputStream out, String status, String contentType, String body) throws IOException {
+        byte[] bodyBytes = body.getBytes(Charset.forName("UTF-8"));
         String hdr = "HTTP/1.1 " + status + "\r\n" +
                      "Content-Type: " + contentType + "\r\n" +
                      "Content-Length: " + bodyBytes.length + "\r\n" +
                      "Connection: close\r\n\r\n";
-        out.write(hdr.getBytes(StandardCharsets.UTF_8));
+        out.write(hdr.getBytes(Charset.forName("UTF-8")));
         out.write(bodyBytes);
         out.flush();
     }

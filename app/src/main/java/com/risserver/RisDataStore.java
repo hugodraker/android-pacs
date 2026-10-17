@@ -17,7 +17,7 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.FileReader;
 import java.io.FileWriter;
-import java.nio.charset.StandardCharsets;
+import java.nio.charset.Charset;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
@@ -27,7 +27,8 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Random;
 
-public class RisDataStore {public static final int FIELD_COUNT = 27;
+public class RisDataStore {
+    public static final int FIELD_COUNT = 27;
     public static final int MAX_CSV_ROWS = 16384;
     public static final int MAX_PROC_CODES = 256;
 
@@ -122,8 +123,7 @@ public class RisDataStore {public static final int FIELD_COUNT = 27;
         return String.format(Locale.US, "UNLINKED%06d", max + 1);
     }
 
-    
-public RisDataStore(Context context) {
+    public RisDataStore(Context context) {
         dataDir = context.getExternalFilesDir(null);
         if (dataDir == null) {
             dataDir = context.getFilesDir();
@@ -164,9 +164,14 @@ public RisDataStore(Context context) {
         String line = "[" + sdf.format(new Date()) + "] " + msg.replaceAll("[\\r\\n]+$", "");
 
         if (debugLog == 1) {
-            try (FileWriter fw = new FileWriter(logFile, true)) {
+            FileWriter fw = null;
+            try {
+                fw = new FileWriter(logFile, true);
                 fw.write(line + "\n");
-            } catch (Exception ignored) {}
+            } catch (Exception ignored) {
+            } finally {
+                if (fw != null) try { fw.close(); } catch (Exception ignored) {}
+            }
         }
 
         logBuffer.add(line);
@@ -196,7 +201,9 @@ public RisDataStore(Context context) {
             saveConfig();
         } else {
             Map<String, String> map = new HashMap<>();
-            try (BufferedReader br = new BufferedReader(new FileReader(iniFile))) {
+            BufferedReader br = null;
+            try {
+                br = new BufferedReader(new FileReader(iniFile));
                 String line;
                 while ((line = br.readLine()) != null) {
                     int eq = line.indexOf('=');
@@ -206,22 +213,24 @@ public RisDataStore(Context context) {
                         map.put(k, v);
                     }
                 }
-                setAeTitle(map.getOrDefault("aetitle", "PACS"));
-                delPwd = map.getOrDefault("deletepassword", "0").trim();
-                omittedFields = map.getOrDefault("omittedfields", "0").trim();
+                setAeTitle(map.containsKey("aetitle") ? map.get("aetitle") : "PACS");
+                delPwd = map.containsKey("deletepassword") ? map.get("deletepassword").trim() : "0";
+                omittedFields = map.containsKey("omittedfields") ? map.get("omittedfields").trim() : "0";
                 telnetPort = parseIntSafe(map.get("telnetport"), 2323);
                 httpPort = parseIntSafe(map.get("httpport"), 8080);
                 dicomPort = parseIntSafe(map.get("dicomport"), 1104);
                 telnetTimeout = parseIntSafe(map.get("telnettimeout"), 10);
                 debugLog = parseIntSafe(map.get("debuglog"), 1);
 
-                storageRootName = map.getOrDefault("storageroot", "dicomstore").trim();
-                storageFolder = map.getOrDefault("storagefolder", "D0000000").trim();
+                storageRootName = map.containsKey("storageroot") ? map.get("storageroot").trim() : "dicomstore";
+                storageFolder = map.containsKey("storagefolder") ? map.get("storagefolder").trim() : "D0000000";
                 storageIndex = parseIntSafe(map.get("storageindex"), 0);
                 if (!storageFolder.matches("D\\d{7}")) storageFolder = "D0000000";
                 if (storageIndex < 0 || storageIndex > MAX_FILES_PER_FOLDER) storageIndex = 0;
             } catch (Exception e) {
                 writeLog("Failed to read INI: " + e.getMessage());
+            } finally {
+                if (br != null) try { br.close(); } catch (Exception e) {}
             }
         }
 
@@ -252,10 +261,14 @@ public RisDataStore(Context context) {
                 "StorageRoot=" + storageRootName + "\r\n" +
                 "StorageFolder=" + storageFolder + "\r\n" +
                 "StorageIndex=" + storageIndex + "\r\n";
-        try (FileOutputStream fos = new FileOutputStream(iniFile)) {
-            fos.write(ini.getBytes(StandardCharsets.UTF_8));
+        FileOutputStream fos = null;
+        try {
+            fos = new FileOutputStream(iniFile);
+            fos.write(ini.getBytes(Charset.forName("UTF-8")));
         } catch (Exception e) {
             writeLog("Failed to save INI: " + e.getMessage());
+        } finally {
+            if (fos != null) try { fos.close(); } catch (Exception e) {}
         }
     }
 
@@ -364,8 +377,7 @@ public RisDataStore(Context context) {
         notifyStatusChanged();
     }
 
-    
-private void deleteRecursively(File f) {
+    private void deleteRecursively(File f) {
         if (f != null && f.exists()) {
             if (f.isDirectory()) {
                 File[] children = f.listFiles();
@@ -415,8 +427,7 @@ private void deleteRecursively(File f) {
         notifyStatusChanged();
     }
 
-    
-public synchronized List<String> getCsvRowsSnapshot() {
+    public synchronized List<String> getCsvRowsSnapshot() {
         ensureCsvInitialized();
         return new ArrayList<>(csvData);
     }
@@ -426,11 +437,10 @@ public synchronized List<String> getCsvRowsSnapshot() {
     }
 
     public synchronized void ensureUnlinkedPatientExists() {
-        // Obsolete: Unlinked images are now handled dynamically on a per-image basis.
+        // Obsolete
     }
 
-    
-private String formatDate8(Date d) {
+    private String formatDate8(Date d) {
         SimpleDateFormat sdf = new SimpleDateFormat("yyyyMMdd", Locale.US);
         return sdf.format(d);
     }
@@ -477,7 +487,8 @@ private String formatDate8(Date d) {
         notifyStatusChanged();
         return found;
     }
-public synchronized void deletePatientByAccession(String acc) {
+    
+    public synchronized void deletePatientByAccession(String acc) {
         if (acc == null || acc.trim().isEmpty()) return;
         acc = acc.trim();
 
@@ -491,8 +502,7 @@ public synchronized void deletePatientByAccession(String acc) {
         }
     }
 
-    
-public synchronized void loadCStoreTracking() {
+    public synchronized void loadCStoreTracking() {
         if (!cStoreFile.exists() || cStoreFile.length() == 0) {
             writeCStoreEntry("Accession", "PatientName", "PatientID", "StudyUID", "SOPInstanceUID",
                              "Folder", "Filename", "Modality", "FileSize", "Timestamp");
@@ -515,11 +525,15 @@ public synchronized void loadCStoreTracking() {
             if (q) sb.append('"');
         }
 
-        try (FileWriter fw = new FileWriter(cStoreFile, true)) {
+        FileWriter fw = null;
+        try {
+            fw = new FileWriter(cStoreFile, true);
             fw.write(sb.toString() + "\n");
         } catch (Exception e) {
             writeLog("Failed to write c-store tracking: " + e.getMessage());
             return false;
+        } finally {
+            if (fw != null) try { fw.close(); } catch (Exception e) {}
         }
         return true;
     }
@@ -537,8 +551,9 @@ public synchronized void loadCStoreTracking() {
         if (!cStoreFile.exists()) return result;
 
         String want = accession == null ? "" : accession.trim();
-
-        try (BufferedReader br = new BufferedReader(new FileReader(cStoreFile))) {
+        BufferedReader br = null;
+        try {
+            br = new BufferedReader(new FileReader(cStoreFile));
             String line = br.readLine(); 
             if (line == null) return result;
 
@@ -562,6 +577,8 @@ public synchronized void loadCStoreTracking() {
             }
         } catch (Exception e) {
             writeLog("Failed to read c-store tracking: " + e.getMessage());
+        } finally {
+            if (br != null) try { br.close(); } catch (Exception e) {}
         }
         return result;
     }
@@ -631,7 +648,9 @@ public synchronized void loadCStoreTracking() {
             procCodesLoaded = true;
             return;
         }
-        try (BufferedReader br = new BufferedReader(new FileReader(f))) {
+        BufferedReader br = null;
+        try {
+            br = new BufferedReader(new FileReader(f));
             String line;
             boolean first = true;
             while ((line = br.readLine()) != null && procCodes.size() < MAX_PROC_CODES) {
@@ -665,28 +684,34 @@ public synchronized void loadCStoreTracking() {
             writeLog("Procedure codes loaded");
         } catch (Exception e) {
             procCodesLoaded = true;
+        } finally {
+            if (br != null) try { br.close(); } catch (Exception e) {}
         }
     }
 
     private String loadAndConvertCsv(File file) {
         if (!file.exists()) return null;
-        try (FileInputStream fis = new FileInputStream(file)) {
+        FileInputStream fis = null;
+        try {
+            fis = new FileInputStream(file);
             byte[] buf = new byte[(int) file.length()];
             int read = fis.read(buf);
             if (read <= 0) return null;
 
             if (read >= 3 && (buf[0] & 0xFF) == 0xEF && (buf[1] & 0xFF) == 0xBB && (buf[2] & 0xFF) == 0xBF) {
-                return new String(buf, 3, read - 3, StandardCharsets.UTF_8);
+                return new String(buf, 3, read - 3, Charset.forName("UTF-8"));
             }
             if (read >= 2 && (buf[0] & 0xFF) == 0xFF && (buf[1] & 0xFF) == 0xFE) {
-                return new String(buf, 2, read - 2, StandardCharsets.UTF_16LE);
+                return new String(buf, 2, read - 2, Charset.forName("UTF-16LE"));
             }
             if (read >= 2 && (buf[0] & 0xFF) == 0xFE && (buf[1] & 0xFF) == 0xFF) {
-                return new String(buf, 2, read - 2, StandardCharsets.UTF_16BE);
+                return new String(buf, 2, read - 2, Charset.forName("UTF-16BE"));
             }
-            return new String(buf, 0, read, StandardCharsets.UTF_8);
+            return new String(buf, 0, read, Charset.forName("UTF-8"));
         } catch (Exception e) {
             return null;
+        } finally {
+            if (fis != null) try { fis.close(); } catch (Exception e) {}
         }
     }
 
@@ -792,7 +817,9 @@ public synchronized void loadCStoreTracking() {
         if (!cStoreFile.exists() || oldAcc == null || oldAcc.isEmpty()) return;
         List<String> lines = new ArrayList<>();
         boolean changed = false;
-        try (BufferedReader br = new BufferedReader(new FileReader(cStoreFile))) {
+        BufferedReader br = null;
+        try {
+            br = new BufferedReader(new FileReader(cStoreFile));
             String header = br.readLine();
             if (header != null) lines.add(header);
             String line;
@@ -808,15 +835,17 @@ public synchronized void loadCStoreTracking() {
                     File f = new File(new File(getStorageRoot(), vals[5]), vals[6]);
                     if (f.exists()) {
                         try {
-                            byte[] fileBytes = java.nio.file.Files.readAllBytes(f.toPath());
+                            byte[] fileBytes = new byte[(int) f.length()];
+                            FileInputStream fis = new FileInputStream(f);
+                            try { fis.read(fileBytes); } finally { fis.close(); }
+
                             boolean fChanged = false;
                             fChanged |= DicomScpServer.patchTagInPlace(fileBytes, 0x0010, 0x0010, newEntry[0]); 
                             fChanged |= DicomScpServer.patchTagInPlace(fileBytes, 0x0010, 0x0030, newEntry[2]); 
                             fChanged |= DicomScpServer.patchTagInPlace(fileBytes, 0x0008, 0x0050, newEntry[8]); 
                             if (fChanged) {
-                                try (FileOutputStream fos = new FileOutputStream(f)) {
-                                    fos.write(fileBytes);
-                                }
+                                FileOutputStream fos = new FileOutputStream(f);
+                                try { fos.write(fileBytes); } finally { fos.close(); }
                                 writeLog("Patched DICOM file tags for moved accession: " + f.getName());
                             }
                         } catch (Exception ignored) {}
@@ -825,12 +854,20 @@ public synchronized void loadCStoreTracking() {
                     lines.add(line);
                 }
             }
-        } catch (Exception e) {}
+        } catch (Exception e) {
+        } finally {
+            if (br != null) try { br.close(); } catch (Exception e) {}
+        }
         
         if (changed) {
-            try (FileWriter fw = new FileWriter(cStoreFile, false)) {
+            FileWriter fw = null;
+            try {
+                fw = new FileWriter(cStoreFile, false);
                 for (String l : lines) fw.write(l + "\n");
-            } catch (Exception e) {}
+            } catch (Exception e) {
+            } finally {
+                if (fw != null) try { fw.close(); } catch (Exception e) {}
+            }
             accessionImageCount.remove(oldAcc);
             accessionImageCount.put(newEntry[8], getStoredImagesForAccession(newEntry[8]).size());
         }

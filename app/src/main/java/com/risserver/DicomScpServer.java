@@ -20,7 +20,7 @@ import java.net.BindException;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.nio.charset.StandardCharsets;
+import java.nio.charset.Charset;
 import java.util.Arrays;
 import java.util.Date;
 import java.util.HashMap;
@@ -30,7 +30,8 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
-public class DicomScpServer {private final RisDataStore store;
+public class DicomScpServer {
+    private final RisDataStore store;
     private ServerSocket serverSocket;
     private volatile boolean running = false;
 
@@ -72,7 +73,12 @@ public class DicomScpServer {private final RisDataStore store;
 
     public void start() {
         running = true;
-        new Thread(this::acceptLoop, "DicomScpThread").start();
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                acceptLoop();
+            }
+        }, "DicomScpThread").start();
     }
 
     public void stop() {
@@ -102,9 +108,14 @@ public class DicomScpServer {private final RisDataStore store;
             store.notifyStatusChanged();
 
             while (running && !serverSocket.isClosed()) {
-                Socket client = serverSocket.accept();
+                final Socket client = serverSocket.accept();
                 store.writeLog("DICOM SCU connected.");
-                new Thread(() -> handleClient(client), "DicomClientWorker").start();
+                new Thread(new Runnable() {
+                    @Override
+                    public void run() {
+                        handleClient(client);
+                    }
+                }, "DicomClientWorker").start();
             }
         } catch (IOException e) {
             if (running) store.writeLog("ERROR: Failed to listen on DICOM port " + store.dicomPort);
@@ -112,8 +123,11 @@ public class DicomScpServer {private final RisDataStore store;
     }
 
     private void handleClient(Socket client) {
-        try (DataInputStream in = new DataInputStream(client.getInputStream());
-             OutputStream out = client.getOutputStream()) {
+        DataInputStream in = null;
+        OutputStream out = null;
+        try {
+            in = new DataInputStream(client.getInputStream());
+            out = client.getOutputStream();
 
             findCmd.reset();
             findData.reset();
@@ -171,7 +185,7 @@ public class DicomScpServer {private final RisDataStore store;
                                     walkElements(cBuf, 0, cBuf.length, true, ce, 0);
                                     findCommand = parseIntOr(ce.get(0x00000100), 0);
                                     findMsgId = parseIntOr(ce.get(0x00000120), 0);
-                                    findSopClassUid = ce.getOrDefault(0x00000002, "");
+                                    findSopClassUid = ce.containsKey(0x00000002) ? ce.get(0x00000002) : "";
                                     findCmd.reset();
                                     if (findCommand == 0x0030) {
                                         handleCEchoRq(out, findPcId, findMsgId);
@@ -222,6 +236,8 @@ public class DicomScpServer {private final RisDataStore store;
             }
         } catch (Exception ignored) {
         } finally {
+            if (in != null) try { in.close(); } catch (IOException ignored) {}
+            if (out != null) try { out.close(); } catch (IOException ignored) {}
             try { client.close(); } catch (IOException ignored) {}
         }
     }
@@ -240,7 +256,7 @@ public class DicomScpServer {private final RisDataStore store;
 
         int offset = 74;
         byte[] appCtxHdr = { 0x10, 0x00, 0x00, 0x15 };
-        byte[] appCtxUid = "1.2.840.10008.3.1.1.1".getBytes(StandardCharsets.US_ASCII);
+        byte[] appCtxUid = "1.2.840.10008.3.1.1.1".getBytes(Charset.forName("US-ASCII"));
         System.arraycopy(appCtxHdr, 0, acPdu, offset, 4); offset += 4;
         System.arraycopy(appCtxUid, 0, acPdu, offset, appCtxUid.length); offset += appCtxUid.length;
 
@@ -257,12 +273,12 @@ public class DicomScpServer {private final RisDataStore store;
                 acPdu[offset++] = 0x00; acPdu[offset++] = 0x00;
 
                 byte[] tsHdr = { 0x40, 0x00, 0x00, 0x11 };
-                byte[] tsUid = "1.2.840.10008.1.2".getBytes(StandardCharsets.US_ASCII);
+                byte[] tsUid = "1.2.840.10008.1.2".getBytes(Charset.forName("US-ASCII"));
                 System.arraycopy(tsHdr, 0, acPdu, offset, 4); offset += 4;
                 System.arraycopy(tsUid, 0, acPdu, offset, tsUid.length); offset += tsUid.length;
                 
                 byte[] tsHdrExt = { 0x40, 0x00, 0x00, 0x15 };
-                byte[] tsUidExt = "1.2.840.10008.1.2.1".getBytes(StandardCharsets.US_ASCII);
+                byte[] tsUidExt = "1.2.840.10008.1.2.1".getBytes(Charset.forName("US-ASCII"));
                 System.arraycopy(tsHdrExt, 0, acPdu, offset, 4); offset += 4;
                 System.arraycopy(tsUidExt, 0, acPdu, offset, tsUidExt.length); offset += tsUidExt.length;
             }
@@ -408,13 +424,13 @@ public class DicomScpServer {private final RisDataStore store;
         Map<Integer, String> el = new HashMap<>();
         walkElements(ds, 0, ds.length, false, el, 0);
 
-        String sopClassUid = el.getOrDefault(0x00080016, findSopClassUid);
-        String sopInstUid = el.getOrDefault(0x00080018, "");
-        String modality = el.getOrDefault(0x00080060, "OT");
-        String patId = el.getOrDefault(0x00100020, "");
-        String patName = el.getOrDefault(0x00100010, "");
-        String studyUid = el.getOrDefault(0x0020000D, "");
-        String accNum = el.getOrDefault(0x00080050, "").trim();
+        String sopClassUid = el.containsKey(0x00080016) ? el.get(0x00080016) : findSopClassUid;
+        String sopInstUid = el.containsKey(0x00080018) ? el.get(0x00080018) : "";
+        String modality = el.containsKey(0x00080060) ? el.get(0x00080060) : "OT";
+        String patId = el.containsKey(0x00100020) ? el.get(0x00100020) : "";
+        String patName = el.containsKey(0x00100010) ? el.get(0x00100010) : "";
+        String studyUid = el.containsKey(0x0020000D) ? el.get(0x0020000D) : "";
+        String accNum = el.containsKey(0x00080050) ? el.get(0x00080050).trim() : "";
 
         boolean isUnlinked = accNum.isEmpty();
         String effectiveAcc = accNum;
@@ -454,8 +470,12 @@ public class DicomScpServer {private final RisDataStore store;
                 filename = dest.getName();
             }
 
-            try (FileOutputStream fos = new FileOutputStream(dest)) {
+            FileOutputStream fos = null;
+            try {
+                fos = new FileOutputStream(dest);
                 fos.write(ds);
+            } finally {
+                if (fos != null) try { fos.close(); } catch (Exception e) {}
             }
 
             java.text.SimpleDateFormat tsFmt = new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US);
@@ -481,46 +501,6 @@ public class DicomScpServer {private final RisDataStore store;
 
         sendPDataTf(out, pcId, 0x03, patchGroupLength(cmd.toByteArray()));
     }
-/* 
-     * ========================================================================
-     * COMMENTED OUT: Header rewrites are disabled so images are stored
-     * exactly as received via network streams. 
-     * 
-     * Implementation Class UID Examples (Tag 0002,0012):
-     * - DCMTK / OFFIS:      "1.2.276.0.7230010.3.0.3.6.4"
-     * - dcm4che:            "1.2.40.0.13.1.3"
-     * - ClearCanvas:        "1.2.826.0.1.3680043.2.109.3"
-     * - OsiriX:             "1.2.276.0.7230010.3.0.3.6.1"
-     * - Merge Healthcare:   "1.2.840.113674.514.2"
-     * - Previous RIS Server:"1.2.276.0.723.1.99"
-     * ========================================================================
-     *
-    private void writePart10(File dest, byte[] ds, String sopClassUid, String sopInstUid) throws IOException {
-        ByteArrayOutputStream meta = new ByteArrayOutputStream();
-        meta.write(new byte[]{0x02, 0x00, 0x00, 0x00, 'U', 'L', 0x04, 0x00, 0x00, 0x00, 0x00, 0x00});
-        writeMetaElement(meta, 0x0002, 0x0002, "UI", (sopClassUid.isEmpty() ? "1.2.840.10008.5.1.4.1.1.2" : sopClassUid).getBytes(StandardCharsets.US_ASCII));
-        writeMetaElement(meta, 0x0002, 0x0003, "UI", (sopInstUid.isEmpty() ? "1.2.840.10008.1.2.0" : sopInstUid).getBytes(StandardCharsets.US_ASCII));
-        writeMetaElement(meta, 0x0002, 0x0010, "UI", "1.2.840.10008.1.2".getBytes(StandardCharsets.US_ASCII));
-        writeMetaElement(meta, 0x0002, 0x0012, "UI", "1.2.276.0.723.1.99".getBytes(StandardCharsets.US_ASCII));
-        byte[] m = meta.toByteArray();
-        int gl = m.length - 12;
-        m[8] = (byte)(gl & 0xFF); m[9] = (byte)((gl >> 8) & 0xFF); m[10] = (byte)((gl >> 16) & 0xFF); m[11] = (byte)((gl >> 24) & 0xFF);
-        try (java.io.FileOutputStream fos = new java.io.FileOutputStream(dest)) {
-            byte[] preamble = new byte[128];
-            fos.write(preamble); fos.write("DICM".getBytes(StandardCharsets.US_ASCII)); fos.write(m); fos.write(ds);
-        }
-    }
-
-    private void writeMetaElement(ByteArrayOutputStream out, int g, int e, String vr, byte[] v) {
-        out.write(g & 0xFF); out.write((g >> 8) & 0xFF); out.write(e & 0xFF); out.write((e >> 8) & 0xFF);
-        out.write(vr.charAt(0)); out.write(vr.charAt(1));
-        int pad = v.length % 2; int totalLen = v.length + pad;
-        if (LONG_VRS.contains(vr)) {
-            out.write(0); out.write(0); out.write(totalLen & 0xFF); out.write((totalLen >> 8) & 0xFF); out.write((totalLen >> 16) & 0xFF); out.write((totalLen >> 24) & 0xFF);
-        } else { out.write(totalLen & 0xFF); out.write((totalLen >> 8) & 0xFF); }
-        out.write(v, 0, v.length); if (pad == 1) out.write(0); 
-    }
-    */
 
     public static boolean patchTagInPlace(byte[] buf, int g, int e, String newValue) {
         if (newValue == null || newValue.isEmpty()) return false;
@@ -550,7 +530,7 @@ public class DicomScpServer {private final RisDataStore store;
                 }
 
                 if (vlen > 0 && vlen < 2048 && i + offset + vlen <= buf.length) {
-                    byte[] newBytes = newValue.getBytes(StandardCharsets.UTF_8);
+                    byte[] newBytes = newValue.getBytes(Charset.forName("UTF-8"));
                     boolean changed = false;
                     for (int j = 0; j < vlen; j++) {
                         byte b = (j < newBytes.length) ? newBytes[j] : (byte) ' '; 
@@ -646,7 +626,7 @@ public class DicomScpServer {private final RisDataStore store;
         if ("SS".equals(vr)) return String.valueOf((short)(b[off] & 0xFF) << 8 | (b[off + 1] & 0xFF));
         if ("UL".equals(vr)) return String.valueOf(i32(b, off));
         if (len > 4096) return null; 
-        return new String(b, off, len, StandardCharsets.UTF_8).replaceAll("[\\u0000 ]+$", "");
+        return new String(b, off, len, Charset.forName("UTF-8")).replaceAll("[\\u0000 ]+$", "");
     }
 
     private static int u16(byte[] b, int o) { return (b[o] & 0xFF) | ((b[o + 1] & 0xFF) << 8); }
@@ -697,7 +677,7 @@ public class DicomScpServer {private final RisDataStore store;
                 }
 
                 if (vlen > 0 && vlen < 128 && i + offset + vlen <= buf.length) {
-                    String s = new String(buf, i + offset, vlen, StandardCharsets.UTF_8);
+                    String s = new String(buf, i + offset, vlen, Charset.forName("UTF-8"));
                     return s.replaceAll("[\\0 ]+$", "");
                 }
             }
@@ -756,7 +736,7 @@ public class DicomScpServer {private final RisDataStore store;
     }
 
     private void dicomAddStr(ByteArrayOutputStream out, int g, int e, String s) {
-        byte[] strBytes = (s == null ? "" : s).getBytes(StandardCharsets.UTF_8);
+        byte[] strBytes = (s == null ? "" : s).getBytes(Charset.forName("UTF-8"));
         int pad = (strBytes.length % 2 != 0) ? 1 : 0;
         int tot = strBytes.length + pad;
         out.write(g & 0xFF); out.write((g >> 8) & 0xFF);
