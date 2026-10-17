@@ -4,7 +4,7 @@
  * THIS WORK IS NOT FIT FOR ANY FUNCTION OR PURPOSE, COMES WITH NO WARRANTY,
  * AND IS BEING RELEASED INTO THE PUBLIC DOMAIN.
  *
- * 2026-10-11 Hugo
+ * 2026-10-16 Hugo
  *
  * ============================================================================ */
 
@@ -12,6 +12,7 @@ package com.hugo.risserver;
 
 import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
+import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
@@ -21,6 +22,7 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -447,7 +449,7 @@ public class DicomScpServer {
             writePart10(dest, ds, sopClassUid, sopInstUid);
 
             java.text.SimpleDateFormat tsFmt = new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US);
-            store.recordStoredImage(effectiveAcc, effectivePatName, effectivePatId, studyUid, sopInstUid,
+            store.recordStoredImage(effectiveAcc, effectivePatName, effectivePatId, studyUID, sopInstUid,
                                    folder, filename, modality, dest.length(), tsFmt.format(new Date()));
 
             store.getImageCountForAccession(effectiveAcc);
@@ -480,9 +482,9 @@ public class DicomScpServer {
         writeMetaElement(meta, 0x0002, 0x0002, "UI", 
                        (sopClassUid.isEmpty() ? "1.2.840.10008.5.1.4.1.1.2" : sopClassUid).getBytes(StandardCharsets.US_ASCII));
         
-        // Media Storage SOP Instance UID (0002,0003) UI
+        // Media Storage SOP Instance UID (0002,0003) UI - FIXED TYPE MISMATCH WITH PARENTHESES
         writeMetaElement(meta, 0x0002, 0x0003, "UI", 
-                       sopInstUid.isEmpty() ? "1.2.840.10008.1.2.0" : sopInstUid.getBytes(StandardCharsets.US_ASCII));
+                       (sopInstUid.isEmpty() ? "1.2.840.10008.1.2.0" : sopInstUid).getBytes(StandardCharsets.US_ASCII));
         
         // Transfer Syntax UID (0002,0010) UI - Implicit VR Little Endian
         writeMetaElement(meta, 0x0002, 0x0010, "UI", 
