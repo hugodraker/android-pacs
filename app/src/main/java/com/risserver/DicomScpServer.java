@@ -415,6 +415,10 @@ public class DicomScpServer {
      * Handle C-STORE-RQ — receives and saves DICOM images
      * Falls back to Unlinked Patient when accession is missing/empty
      */
+/**
+     * Handle C-STORE-RQ — receives and saves DICOM images
+     * Falls back to Unlinked Patient when accession is missing/empty
+     */
     private void handleCStoreRq(OutputStream out, int pcId, int msgId, byte[] ds) throws IOException {
         Map<Integer, String> el = new HashMap<>();
         walkElements(ds, 0, ds.length, false, el, 0);
@@ -448,6 +452,10 @@ public class DicomScpServer {
         try {
             File dest = store.getImageFilePath(sopInstUid);
             if (dest != null) {
+                // Ensure parent folder exists just in case it was manually deleted
+                if (!dest.getParentFile().exists()) {
+                    dest.getParentFile().mkdirs();
+                }
                 folder = dest.getParentFile().getName();
                 filename = dest.getName();
                 store.writeLog("C-STORE: Overwriting existing SOP: " + sopInstUid);

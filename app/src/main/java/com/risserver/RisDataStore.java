@@ -171,42 +171,62 @@ public class RisDataStore {
         if (aeCalled.length() > 31) aeCalled = aeCalled.substring(0, 31);
     }
 
-    public synchronized void loadConfig() {
+public synchronized void loadConfig() {
+        // Ensure the root data directory exists first
+        if (!dataDir.exists()) {
+            dataDir.mkdirs();
+        }
+
         if (!iniFile.exists()) {
             saveConfig();
-            return;
-        }
-        Map<String, String> map = new HashMap<>();
-        try (BufferedReader br = new BufferedReader(new FileReader(iniFile))) {
-            String line;
-            while ((line = br.readLine()) != null) {
-                int eq = line.indexOf('=');
-                if (eq > 0) {
-                    String k = line.substring(0, eq).trim().toLowerCase(Locale.US);
-                    String v = line.substring(eq + 1).trim();
-                    map.put(k, v);
+        } else {
+            Map<String, String> map = new HashMap<>();
+            try (BufferedReader br = new BufferedReader(new FileReader(iniFile))) {
+                String line;
+                while ((line = br.readLine()) != null) {
+                    int eq = line.indexOf('=');
+                    if (eq > 0) {
+                        String k = line.substring(0, eq).trim().toLowerCase(Locale.US);
+                        String v = line.substring(eq + 1).trim();
+                        map.put(k, v);
+                    }
                 }
-            }
-            setAeTitle(map.getOrDefault("aetitle", "PACS"));
-            delPwd = map.getOrDefault("deletepassword", "0").trim();
-            omittedFields = map.getOrDefault("omittedfields", "0").trim();
-            telnetPort = parseIntSafe(map.get("telnetport"), 2323);
-            httpPort = parseIntSafe(map.get("httpport"), 8080);
-            dicomPort = parseIntSafe(map.get("dicomport"), 1104);
-            telnetTimeout = parseIntSafe(map.get("telnettimeout"), 10);
-            debugLog = parseIntSafe(map.get("debuglog"), 1);
+                setAeTitle(map.getOrDefault("aetitle", "PACS"));
+                delPwd = map.getOrDefault("deletepassword", "0").trim();
+                omittedFields = map.getOrDefault("omittedfields", "0").trim();
+                telnetPort = parseIntSafe(map.get("telnetport"), 2323);
+                httpPort = parseIntSafe(map.get("httpport"), 8080);
+                dicomPort = parseIntSafe(map.get("dicomport"), 1104);
+                telnetTimeout = parseIntSafe(map.get("telnettimeout"), 10);
+                debugLog = parseIntSafe(map.get("debuglog"), 1);
 
-            storageRootName = map.getOrDefault("storageroot", "dicomstore").trim();
-            storageFolder = map.getOrDefault("storagefolder", "D0000000").trim();
-            storageIndex = parseIntSafe(map.get("storageindex"), 0);
-            if (!storageFolder.matches("D\\d{7}")) storageFolder = "D0000000";
-            if (storageIndex < 0 || storageIndex > MAX_FILES_PER_FOLDER) storageIndex = 0;
-        } catch (Exception e) {
-            writeLog("Failed to read INI: " + e.getMessage());
+                storageRootName = map.getOrDefault("storageroot", "dicomstore").trim();
+                storageFolder = map.getOrDefault("storagefolder", "D0000000").trim();
+                storageIndex = parseIntSafe(map.get("storageindex"), 0);
+                if (!storageFolder.matches("D\\d{7}")) storageFolder = "D0000000";
+                if (storageIndex < 0 || storageIndex > MAX_FILES_PER_FOLDER) storageIndex = 0;
+            } catch (Exception e) {
+                writeLog("Failed to read INI: " + e.getMessage());
+            }
+        }
+
+        // Proactively make all storage folders and subfolders prior to getting images
+        File root = new File(dataDir, storageRootName);
+        if (!root.exists()) {
+            root.mkdirs();
+        }
+        File currentStorageDir = new File(root, storageFolder);
+        if (!currentStorageDir.exists()) {
+            currentStorageDir.mkdirs();
         }
     }
 
     public synchronized void saveConfig() {
+        // Ensure parent directory exists before attempting to write the INI
+        if (!iniFile.getParentFile().exists()) {
+            iniFile.getParentFile().mkdirs();
+        }
+        
         String ini = "[Server]\r\n" +
                 "AETitle=" + aeCalled + "\r\n" +
                 "DeletePassword=" + delPwd + "\r\n" +
