@@ -116,21 +116,25 @@ public class RisDataStore {
     private LogListener logListener;
     private final Random random = new Random();
 
-    public RisDataStore(Context context) {
-        dataDir = context.getExternalFilesDir(null);
-        if (dataDir == null) dataDir = context.getFilesDir();
-        if (!dataDir.exists()) dataDir.mkdirs();
-
-        iniFile = new File(dataDir, "RIS_SERVER.ini");
-        logFile = new File(dataDir, "ris_server.log");
-        cStoreFile = new File(dataDir, CSTORE_CSV_NAME);
-
-        loadConfig();
-        ensureCsvInitialized();
-        resetWorklistToHeader();      // also seeds the Unlinked Images row
-        loadProcedureCodes();
-        loadCStoreTracking();
+public RisDataStore(Context context) {
+    dataDir = context.getExternalFilesDir(null);
+    if (dataDir == null) {
+        dataDir = context.getFilesDir();
     }
+    if (!dataDir.exists()) {
+        dataDir.mkdirs();
+    }
+
+    iniFile = new File(dataDir, "RIS_SERVER.ini");
+    logFile = new File(dataDir, "ris_server.log");
+    cStoreFile = new File(dataDir, CSTORE_CSV_NAME);
+
+    loadConfig();
+    ensureCsvInitialized();
+    resetWorklistToHeader();      // also seeds the Unlinked Images row
+    loadProcedureCodes();
+    loadCStoreTracking();
+}
 
 //public RisDataStore(Context context) {
     // Target a public shared folder on the primary shared storage (accessible to other apps)
