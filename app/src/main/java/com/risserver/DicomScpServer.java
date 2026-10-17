@@ -1,11 +1,11 @@
 /* ============================================================================
+ * DicomScpServer.java
  * RIS Multi-Protocol Server (DICOM + Telnet + HTTP) - ANDROID VERSION
  *
  * THIS WORK IS NOT FIT FOR ANY FUNCTION OR PURPOSE, COMES WITH NO WARRANTY,
  * AND IS BEING RELEASED INTO THE PUBLIC DOMAIN.
  *
- * 2026-10-16 Hugo
- *
+ * 2026-11-17 Hugo
  * ============================================================================ */
 
 package com.hugo.risserver;
@@ -445,30 +445,9 @@ public class DicomScpServer {
                 filename = dest.getName();
             }
 
-            if (!isUnlinked) {
-                List<String> rows = store.getCsvRowsSnapshot();
-                for (int ri = 1; ri < rows.size(); ri++) {
-                    String[] entry = RisDataStore.parseCsvLineToEntry(rows.get(ri));
-                    if (effectiveAcc.equals(entry[8])) {
-                        patchTagInPlace(ds, 0x0010, 0x0010, entry[0]); 
-                        patchTagInPlace(ds, 0x0010, 0x0020, entry[1]); 
-                        patchTagInPlace(ds, 0x0010, 0x0030, entry[2]); 
-                        patchTagInPlace(ds, 0x0010, 0x0040, entry[3]); 
-                        patchTagInPlace(ds, 0x0008, 0x0050, entry[8]); 
-                        patchTagInPlace(ds, 0x0008, 0x1030, entry[22]); 
-                        patchTagInPlace(ds, 0x0008, 0x0060, entry[20]); 
-                        
-                        effectivePatName = entry[0].isEmpty() ? effectivePatName : entry[0];
-                        effectivePatId = entry[1].isEmpty() ? effectivePatId : entry[1];
-                        modality = entry[20].isEmpty() ? modality : entry[20];
-                        break;
-                    }
-                }
-            }
-
-            try (FileOutputStream fos = new FileOutputStream(dest)) {
-                fos.write(ds);
-            }
+            // Keep the exact image stream as received without touching inner tags,
+            // but encapsulate inside a valid DICOM Part 10 structure so Viewers accept it.
+            writePart10(dest, ds, sopClassUid, sopInstUid);
 
             java.text.SimpleDateFormat tsFmt = new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US);
             store.recordStoredImage(effectiveAcc, effectivePatName, effectivePatId, studyUid, sopInstUid,
@@ -492,6 +471,66 @@ public class DicomScpServer {
         if (!sopInstUid.isEmpty()) dicomAddStr(cmd, 0x0000, 0x1000, sopInstUid);
 
         sendPDataTf(out, pcId, 0x03, patchGroupLength(cmd.toByteArray()));
+    }
+
+    private void writePart10(File dest, byte[] ds, String sopClassUid, String sopInstUid) throws IOException {
+        ByteArrayOutputStream meta = new ByteArrayOutputStream();
+        
+        meta.write(new byte[]{0x02, 0x00, 0x00, 0x00, 'U', 'L', 0x04, 0x00, 0x00, 0x00, 0x00, 0x00});
+        
+        writeMetaElement(meta, 0x0002, 0x0002, "UI", 
+                       (sopClassUid.isEmpty() ? "1.2.840.10008.5.1.4.1.1.2" : sopClassUid).getBytes(StandardCharsets.US_ASCII));
+        
+        writeMetaElement(meta, 0x0002, 0x0003, "UI", 
+                       (sopInstUid.isEmpty() ? "1.2.840.10008.1.2.0" : sopInstUid).getBytes(StandardCharsets.US_ASCII));
+        
+        writeMetaElement(meta, 0x0002, 0x0010, "UI", 
+                       "1.2.840.10008.1.2".getBytes(StandardCharsets.US_ASCII));
+        
+        /* 
+         * Implementation Class UID Examples (Tag 0002,0012):
+         * - DCMTK / OFFIS:      "1.2.276.0.7230010.3.0.3.6.4"
+         * - dcm4che:            "1.2.40.0.13.1.3"
+         * - ClearCanvas:        "1.2.826.0.1.3680043.2.109.3"
+         * - OsiriX:             "1.2.276.0.7230010.3.0.3.6.1"
+         * - Merge Healthcare:   "1.2.840.113674.514.2"
+         */
+        writeMetaElement(meta, 0x0002, 0x0012, "UI", 
+                       "1.2.276.0.723.1.99".getBytes(StandardCharsets.US_ASCII));
+
+        byte[] m = meta.toByteArray();
+        int gl = m.length - 12;
+        m[8] = (byte)(gl & 0xFF);
+        m[9] = (byte)((gl >> 8) & 0xFF);
+        m[10] = (byte)((gl >> 16) & 0xFF);
+        m[11] = (byte)((gl >> 24) & 0xFF);
+
+        try (FileOutputStream fos = new FileOutputStream(dest)) {
+            byte[] preamble = new byte[128];
+            fos.write(preamble);
+            fos.write("DICM".getBytes(StandardCharsets.US_ASCII));
+            fos.write(m);
+            fos.write(ds);
+        }
+    }
+
+    private void writeMetaElement(ByteArrayOutputStream out, int g, int e, String vr, byte[] v) {
+        out.write(g & 0xFF); out.write((g >> 8) & 0xFF);
+        out.write(e & 0xFF); out.write((e >> 8) & 0xFF);
+        out.write(vr.charAt(0)); out.write(vr.charAt(1));
+        
+        int pad = v.length % 2; 
+        int totalLen = v.length + pad;
+
+        if (LONG_VRS.contains(vr)) {
+            out.write(0); out.write(0); 
+            out.write(totalLen & 0xFF); out.write((totalLen >> 8) & 0xFF);
+            out.write((totalLen >> 16) & 0xFF); out.write((totalLen >> 24) & 0xFF);
+        } else {
+            out.write(totalLen & 0xFF); out.write((totalLen >> 8) & 0xFF);
+        }
+        out.write(v, 0, v.length);
+        if (pad == 1) out.write(0); 
     }
 
     public static boolean patchTagInPlace(byte[] buf, int g, int e, String newValue) {
@@ -732,6 +771,7 @@ public class DicomScpServer {
         out.write(v & 0xFF); out.write((v >> 8) & 0xFF);
         out.write((v >> 16) & 0xFF); out.write((v >> 24) & 0xFF);
     }
+
     private void dicomSeqHdr(ByteArrayOutputStream out, int g, int e) {
         out.write(g & 0xFF); out.write((g >> 8) & 0xFF);
         out.write(e & 0xFF); out.write((e >> 8) & 0xFF);
@@ -753,44 +793,3 @@ public class DicomScpServer {
         out.write(0x00); out.write(0x00); out.write(0x00); out.write(0x00);
     }
 }
-
-/* 
-     * ========================================================================
-     * COMMENTED OUT: Header rewrites are disabled so images are stored
-     * exactly as received via network streams. 
-     * 
-     * Implementation Class UID Examples (Tag 0002,0012):
-     * - DCMTK / OFFIS:      "1.2.276.0.7230010.3.0.3.6.4"
-     * - dcm4che:            "1.2.40.0.13.1.3"
-     * - ClearCanvas:        "1.2.826.0.1.3680043.2.109.3"
-     * - OsiriX:             "1.2.276.0.7230010.3.0.3.6.1"
-     * - Merge Healthcare:   "1.2.840.113674.514.2"
-     * - Previous RIS Server:"1.2.276.0.723.1.99"
-     * ========================================================================
-     *
-    private void writePart10(File dest, byte[] ds, String sopClassUid, String sopInstUid) throws IOException {
-        ByteArrayOutputStream meta = new ByteArrayOutputStream();
-        meta.write(new byte[]{0x02, 0x00, 0x00, 0x00, 'U', 'L', 0x04, 0x00, 0x00, 0x00, 0x00, 0x00});
-        writeMetaElement(meta, 0x0002, 0x0002, "UI", (sopClassUid.isEmpty() ? "1.2.840.10008.5.1.4.1.1.2" : sopClassUid).getBytes(StandardCharsets.US_ASCII));
-        writeMetaElement(meta, 0x0002, 0x0003, "UI", (sopInstUid.isEmpty() ? "1.2.840.10008.1.2.0" : sopInstUid).getBytes(StandardCharsets.US_ASCII));
-        writeMetaElement(meta, 0x0002, 0x0010, "UI", "1.2.840.10008.1.2".getBytes(StandardCharsets.US_ASCII));
-        writeMetaElement(meta, 0x0002, 0x0012, "UI", "1.2.276.0.723.1.99".getBytes(StandardCharsets.US_ASCII));
-        byte[] m = meta.toByteArray();
-        int gl = m.length - 12;
-        m[8] = (byte)(gl & 0xFF); m[9] = (byte)((gl >> 8) & 0xFF); m[10] = (byte)((gl >> 16) & 0xFF); m[11] = (byte)((gl >> 24) & 0xFF);
-        try (FileOutputStream fos = new FileOutputStream(dest)) {
-            byte[] preamble = new byte[128];
-            fos.write(preamble); fos.write("DICM".getBytes(StandardCharsets.US_ASCII)); fos.write(m); fos.write(ds);
-        }
-    }
-
-    private void writeMetaElement(ByteArrayOutputStream out, int g, int e, String vr, byte[] v) {
-        out.write(g & 0xFF); out.write((g >> 8) & 0xFF); out.write(e & 0xFF); out.write((e >> 8) & 0xFF);
-        out.write(vr.charAt(0)); out.write(vr.charAt(1));
-        int pad = v.length % 2; int totalLen = v.length + pad;
-        if (LONG_VRS.contains(vr)) {
-            out.write(0); out.write(0); out.write(totalLen & 0xFF); out.write((totalLen >> 8) & 0xFF); out.write((totalLen >> 16) & 0xFF); out.write((totalLen >> 24) & 0xFF);
-        } else { out.write(totalLen & 0xFF); out.write((totalLen >> 8) & 0xFF); }
-        out.write(v, 0, v.length); if (pad == 1) out.write(0); 
-    }
-    */

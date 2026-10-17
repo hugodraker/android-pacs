@@ -1,11 +1,11 @@
 /* ============================================================================
+ * TelnetHttpServer.java
  * RIS Multi-Protocol Server (DICOM + Telnet + HTTP) - ANDROID VERSION
  *
  * THIS WORK IS NOT FIT FOR ANY FUNCTION OR PURPOSE, COMES WITH NO WARRANTY,
  * AND IS BEING RELEASED INTO THE PUBLIC DOMAIN.
  *
- * 2026-10-11 Hugo
- *
+ * 2026-11-17 Hugo
  * ============================================================================ */
 
 package com.hugo.risserver;
@@ -114,18 +114,6 @@ public class TelnetHttpServer {
             "<input type='text' name='Accession' placeholder='Accession'> <input type='text' name='ProcID' placeholder='Proc ID'> <select name='Priority'><option value='LOW' selected>LOW</option><option value='MEDIUM'>MEDIUM</option><option value='ROUTINE'>ROUTINE</option><option value='HIGH'>HIGH</option></select> <input type='text' name='StationAE' placeholder='Station AE'><br>" +
             "Start: <input type='date' name='StartDate'> Time: <input type='time' name='StartTime'> <input type='text' name='PerfPhys' placeholder='Perf Phys'> <input type='text' name='SPSDesc' placeholder='SPS Desc'><br>" +
             "<input type='text' name='SPSID' placeholder='SPS ID'> ";
-
-    private static final String HTML_FORMS_2 =
-            " <select name='Status'><option value='0'>NONE</option><option value='1' selected>SCHEDULED</option><option value='2'>ARRIVED</option><option value='3'>READY</option><option value='4'>STARTED</option><option value='5'>DEPARTED</option></select><br>" +
-            "<input type='text' name='RefPhys' placeholder='Ref Phys'> <input type='text' name='StudyDesc' placeholder='Study Desc'><br>" +
-            "<input type='text' name='ProtoCode' placeholder='Proto Code'> <input type='text' name='ProtoScheme' placeholder='Proto Scheme'> <input type='text' name='ProtoMeaning' placeholder='Proto Meaning'><br>" +
-            "<input type='text' name='StudyUID' placeholder='Study UID' style='width:300px;'><br>" +
-            "<div style='margin-top:15px; display:flex; flex-wrap:wrap; gap:10px;'>" +
-            "<button type='button' onclick='sendMan()' class='top-btn bg-green'>Add/Edit Patient</button> " +
-            "<button type='button' onclick='nxtA()' class='top-btn bg-blue'>Next Accession</button> " +
-            "<button type='button' onclick='multiStudy()' class='top-btn bg-blue'>Stub</button> " +
-            "<button type='button' onclick='delP()' class='top-btn bg-red'>Delete Patient</button></div></form><hr>" +
-            "<br><a href='/settings' class='top-btn bg-blue' style='background:#455A64'>Settings</a>";
 
     private static final String HTML_END = "</body></html>";
 
@@ -269,15 +257,27 @@ public class TelnetHttpServer {
         }
     }
 
-    private String extractMultipartField(String bodyStr, String fieldName) {
+    // Extractor now strictly uses proper multipart boundaries
+    private String extractMultipartField(String bodyStr, String fieldName, String boundary) {
         String search = "name=\"" + fieldName + "\"";
         int idx = bodyStr.indexOf(search);
         if (idx < 0) return null;
         int endHeader = bodyStr.indexOf("\r\n\r\n", idx);
         if (endHeader < 0) return null;
         int startVal = endHeader + 4;
-        int endVal = bodyStr.indexOf("\r\n--", startVal);
-        if (endVal < 0) return null;
+        
+        int endVal = bodyStr.length();
+        if (boundary != null) {
+            int bEnd = bodyStr.indexOf("\r\n--" + boundary, startVal);
+            if (bEnd >= 0) endVal = bEnd;
+            else {
+                bEnd = bodyStr.indexOf("--" + boundary, startVal);
+                if (bEnd >= 0) endVal = bEnd;
+            }
+        } else {
+            int bEnd = bodyStr.indexOf("\r\n--", startVal);
+            if (bEnd >= 0) endVal = bEnd;
+        }
         return bodyStr.substring(startVal, endVal);
     }
 
@@ -321,6 +321,15 @@ public class TelnetHttpServer {
             byte[] fullReqBytes = reqBuf.toByteArray();
             String headerStr = new String(fullReqBytes, 0, headerEnd, StandardCharsets.UTF_8);
             String bodyStr = new String(fullReqBytes, headerEnd + 4, fullReqBytes.length - (headerEnd + 4), StandardCharsets.UTF_8);
+
+            String boundary = null;
+            for (String hLine : headerStr.split("\r\n")) {
+                if (hLine.toLowerCase().startsWith("content-type:") && hLine.contains("boundary=")) {
+                    int bIdx = hLine.indexOf("boundary=");
+                    boundary = hLine.substring(bIdx + 9).trim();
+                    break;
+                }
+            }
 
             String firstLine = headerStr.split("\r\n")[0];
             String[] parts = firstLine.split(" ");
@@ -428,8 +437,21 @@ public class TelnetHttpServer {
             }
 
             if (method.equals("POST")) {
+                if (url.equals("/settings/update_folders")) {
+                    String[] params = bodyStr.split("&");
+                    for (String p : params) {
+                        String[] kv = p.split("=");
+                        if (kv.length == 2 && kv[0].equals("storageRootName")) {
+                            store.storageRootName = URLDecoder.decode(kv[1], "UTF-8");
+                        }
+                    }
+                    store.saveConfig();
+                    sendHttpResponse(out, "200 OK", "text/html; charset=utf-8", HTML_START + "<meta http-equiv='refresh' content='0; url=/settings' /><h2>Folders Updated</h2>" + HTML_END);
+                    return;
+                }
+
                 if (url.equals("/settings/delete_all")) {
-                    String inputPwd = extractMultipartField(bodyStr, "pwd");
+                    String inputPwd = extractMultipartField(bodyStr, "pwd", boundary);
                     if (inputPwd == null) {
                         int pwdIdx = bodyStr.indexOf("pwd=");
                         if (pwdIdx >= 0) {
@@ -451,8 +473,8 @@ public class TelnetHttpServer {
                 }
 
                 if (url.equals("/settings/upload")) {
-                    String csvType = extractMultipartField(bodyStr, "csvType");
-                    String fileData = extractMultipartField(bodyStr, "file");
+                    String csvType = extractMultipartField(bodyStr, "csvType", boundary);
+                    String fileData = extractMultipartField(bodyStr, "file", boundary);
                     if (csvType != null && fileData != null && !fileData.trim().isEmpty()) {
                         if (csvType.equals("worklist")) {
                             int csvIdx = fileData.indexOf(RisDataStore.CSV_HEADER);
@@ -520,11 +542,22 @@ public class TelnetHttpServer {
         }
     }
 
+    private String escapeJs(String str) {
+        if (str == null) return "";
+        return str.replace("\\", "\\\\").replace("'", "\\'").replace("\"", "\\\"");
+    }
+
     private String buildSettingsHtml() {
         return HTML_START + 
             "<h2>Settings Panel</h2>" +
             "<div class='query-box'>" +
-            "<h3>Upload Data Files</h3>" +
+            "<h3>Storage Settings</h3>" +
+            "<form action='/settings/update_folders' method='POST'>" +
+            "DICOM Storage Directory Name: <input type='text' name='storageRootName' value='" + escapeJs(store.storageRootName) + "'> " +
+            "<input type='submit' value='Save Path' class='top-btn bg-green'>" +
+            "</form></div>" +
+            "<div class='query-box'>" +
+            "<h3>Upload System Data Files</h3>" +
             "<form action='/settings/upload' method='POST' enctype='multipart/form-data'>" +
             "<select name='csvType' class='top-btn bg-blue' style='width:auto;'>" +
             "<option value='worklist'>Main Worklist (Append)</option>" +
@@ -533,7 +566,7 @@ public class TelnetHttpServer {
             "<option value='rooms.csv'>rooms.csv</option>" +
             "</select> " +
             "<input type='file' name='file' class='top-btn bg-blue' style='width:auto;'> " +
-            "<input type='submit' value='Upload' class='top-btn bg-green'>" +
+            "<input type='submit' value='Upload File' class='top-btn bg-green'>" +
             "</form></div>" +
             "<div class='query-box'>" +
             "<h3>Download Data Files</h3>" +
@@ -545,11 +578,17 @@ public class TelnetHttpServer {
             "</div>" +
             "<div class='query-box' style='border:2px solid #f44336;'>" +
             "<h3>Danger Zone</h3>" +
-            "<form action='/settings/delete_all' method='POST'>" +
+            "<form action='/settings/delete_all' method='POST' style='margin-bottom:15px;'>" +
             "<input type='password' name='pwd' placeholder='Enter Password' required> " +
             "<input type='submit' value='Delete All Data & CSVs' class='top-btn bg-red'>" +
+            "</form><hr>" +
+            "<h4>Upload/Overwrite Image Tracking File</h4>" +
+            "<form action='/settings/upload' method='POST' enctype='multipart/form-data'>" +
+            "<input type='hidden' name='csvType' value='c-store.csv'>" +
+            "<input type='file' name='file' required class='top-btn bg-blue' style='width:auto;'> " +
+            "<input type='submit' value='Upload c-store.csv' class='top-btn bg-red'>" +
             "</form></div>" +
-            "<br><a href='/' class='top-btn bg-blue'>Back to Worklist</a>" +
+            "<br><a href='/' style='color:#2196F3; font-weight:bold; font-size:16px; margin-left:20px;'>Back to Worklist</a>" +
             HTML_END;
     }
 
@@ -648,7 +687,7 @@ public class TelnetHttpServer {
             sb.append("<script>var rData = [");
             for (String[] r : rList) {
                 sb.append(String.format("{id:'%s',loc:'%s',mod:'%s',ae:'%s',name:'%s',room:'%s'},",
-                        r[0], r[1], r[2], r[3], r[4], r[5]));
+                        escapeJs(r[0]), escapeJs(r[1]), escapeJs(r[2]), escapeJs(r[3]), escapeJs(r[4]), escapeJs(r[5])));
             }
             sb.append("]; function updLoc(val) { var r = rData.find(function(x) { return x.room === val; });" +
                       "if(r) { " +
@@ -658,17 +697,17 @@ public class TelnetHttpServer {
                       "} }</script>");
 
             for (String[] r : rList) {
-                sb.append("<option value=\"").append(r[5]).append("\">");
+                sb.append("<option value=\"").append(r[5]).append("\">"); // Room mapping
             }
             sb.append("</datalist>");
             
             for (String[] r : rList) {
-                sb.append("<option value=\"").append(r[4]).append("\">");
+                sb.append("<option value=\"").append(r[4]).append("\">"); // StationName mapping
             }
             sb.append("</datalist>");
             
             for (String[] r : rList) {
-                sb.append("<option value=\"").append(r[2]).append("\">");
+                sb.append("<option value=\"").append(r[2]).append("\">"); // Modality mapping
             }
             sb.append("</datalist>");
         } else {
@@ -677,7 +716,7 @@ public class TelnetHttpServer {
         }
 
         sb.append("<input type='text' name='StationName' list='stNameList' placeholder='Station Name'> ");
-        sb.append("<input type='text' name='Location' list='roomList' oninput='updLoc(this.value)' placeholder='Location'> ");
+        sb.append("<input type='text' name='Location' list='roomList' onchange='updLoc(this.value)' oninput='updLoc(this.value)' placeholder='Location'> ");
         
         sb.append(" <select name='Status'><option value='0'>NONE</option><option value='1' selected>SCHEDULED</option><option value='2'>ARRIVED</option><option value='3'>READY</option><option value='4'>STARTED</option><option value='5'>DEPARTED</option></select><br>");
         sb.append("<input type='text' name='Modality' list='modList' placeholder='Modality'> ");
@@ -690,7 +729,7 @@ public class TelnetHttpServer {
             "<button type='button' onclick='nxtA()' class='top-btn bg-blue'>Next Accession</button> " +
             "<button type='button' onclick='multiStudy()' class='top-btn bg-blue'>Stub</button> " +
             "<button type='button' onclick='delP()' class='top-btn bg-red'>Delete Patient</button></div></form><hr>" +
-            "<br><a href='/settings' class='top-btn bg-blue' style='background:#455A64'>Settings</a>");
+            "<br><div style='text-align:right;'><a href='/settings' style='color:#2196F3; font-weight:bold; font-size:16px; margin-right:20px; text-decoration:none;'>Settings</a></div>");
 
         sb.append(HTML_END);
         return sb.toString();

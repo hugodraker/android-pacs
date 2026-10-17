@@ -1,17 +1,16 @@
 /* ============================================================================
+ * RisDataStore.java
  * RIS Multi-Protocol Server (DICOM + Telnet + HTTP) - ANDROID VERSION
  *
  * THIS WORK IS NOT FIT FOR ANY FUNCTION OR PURPOSE, COMES WITH NO WARRANTY,
  * AND IS BEING RELEASED INTO THE PUBLIC DOMAIN.
  *
- * 2026-10-11 Hugo
- *
+ * 2026-11-17 Hugo
  * ============================================================================ */
 
 package com.hugo.risserver;
 
 import android.content.Context;
-import android.os.Environment;
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileInputStream;
@@ -109,8 +108,11 @@ public class RisDataStore {
     private final Random random = new Random();
 
     public RisDataStore(Context context) {
-        File publicDir = Environment.getExternalStorageDirectory();
-        dataDir = new File(publicDir, "RisServerData");
+        // Use App-specific folder to prevent permission failures
+        dataDir = context.getExternalFilesDir(null);
+        if (dataDir == null) {
+            dataDir = context.getFilesDir();
+        }
 
         if (!dataDir.exists()) {
             dataDir.mkdirs();
