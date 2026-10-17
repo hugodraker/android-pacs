@@ -351,20 +351,6 @@ public class TelnetHttpServer {
                 return;
             }
 
-            if (method.equals("GET") && url.startsWith("/list?acc=")) {
-                String acc = url.substring(10);
-                List<RisDataStore.StoredImageInfo> images = store.getStoredImagesForAccession(acc);
-                StringBuilder html = new StringBuilder(HTML_START).append("<h2>Images for Accession: ").append(acc).append("</h2><ul>");
-                for (RisDataStore.StoredImageInfo img : images) {
-                    html.append("<li>").append(img.filename).append(" (").append(img.modality).append(") - ")
-                        .append("<a href='/download?sop=").append(img.sopInstanceUID).append("'>Download DICOM</a> | ")
-                        .append("<a href='/header?sop=").append(img.sopInstanceUID).append("'>View Header</a></li>");
-                }
-                html.append("</ul><br><a href='/'>Back</a>").append(HTML_END);
-                sendHttpResponse(out, "200 OK", "text/html; charset=utf-8", html.toString());
-                return;
-            }
-
             if (method.equals("GET") && url.startsWith("/download?sop=")) {
                 String sop = url.substring(14);
                 File f = store.getImageFilePath(sop);
@@ -372,7 +358,7 @@ public class TelnetHttpServer {
                     byte[] data = java.nio.file.Files.readAllBytes(f.toPath());
                     String hdr = "HTTP/1.1 200 OK\r\n" +
                                  "Content-Type: application/dicom\r\n" +
-                                 "Content-Disposition: attachment; filename=\"" + f.getName() + "\"\r\n" +
+                                 "Content-Disposition: attachment; filename=\"" + f.getName() + ".dcm\"\r\n" +
                                  "Content-Length: " + data.length + "\r\n" +
                                  "Connection: close\r\n\r\n";
                     out.write(hdr.getBytes(StandardCharsets.UTF_8));
@@ -489,9 +475,17 @@ public class TelnetHttpServer {
                 sb.append("<th>Images</th>");
             } else {
                 String acc = entry[8];
-                int imgCount = store.getImageCountForAccession(acc);
-                if (imgCount > 0) {
-                    sb.append(String.format("<td><b>%d</b> <br><a href='/list?acc=%s'>View</a></td>", imgCount, acc));
+                List<RisDataStore.StoredImageInfo> images = store.getStoredImagesForAccession(acc);
+                if (!images.isEmpty()) {
+                    sb.append("<td style='white-space:nowrap;'>");
+                    for (int imgIdx = 0; imgIdx < images.size(); imgIdx++) {
+                        RisDataStore.StoredImageInfo img = images.get(imgIdx);
+                        sb.append("<div style='margin-bottom:4px; font-size:12px;'>")
+                          .append(img.modality).append(" #").append(imgIdx + 1).append(": ")
+                          .append("<a href='/download?sop=").append(img.sopInstanceUID).append("' style='color:#2196F3;text-decoration:none;font-weight:bold;'>DL .dcm</a> | ")
+                          .append("<a href='/header?sop=").append(img.sopInstanceUID).append("' style='color:#9c27b0;text-decoration:none;font-weight:bold;'>Header</a></div>");
+                    }
+                    sb.append("</td>");
                 } else {
                     sb.append("<td>0</td>");
                 }

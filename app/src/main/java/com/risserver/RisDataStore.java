@@ -11,6 +11,7 @@
 package com.hugo.risserver;
 
 import android.content.Context;
+import android.os.Environment;
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
 import java.io.File;
@@ -39,8 +40,6 @@ public class RisDataStore {
             "Location,Status,Modality,RefPhys,StudyDesc,ProtoCode,ProtoScheme,ProtoMeaning,StudyUID";
 
     // ===== UNLINKED IMAGES PATIENT =====
-    // All images arriving without an Accession Number (0008,0050) are filed under this
-    // single worklist row so their count rolls up and stays visible in the web UI.
     public static final String UNLINKED_PATIENT_NAME = "Unlinked Images";
     public static final String UNLINKED_PATIENT_ID = "UNLINKED-001";
     public static final String UNLINKED_ACCESSION = "UNLINKED-000";
@@ -80,7 +79,6 @@ public class RisDataStore {
     public File logFile;
     public File cStoreFile;
 
-    // Server Configuration (Ports default to unprivileged 2323/8080/1104 if 23/80/104 fail on Android)
     public String aeCalled = "PACS";
     public int telnetPort = 2323;
     public int httpPort = 8080;
@@ -90,71 +88,45 @@ public class RisDataStore {
     public String delPwd = "0";
     public String omittedFields = "0";
 
-    // DICOM Storage Configuration
     public String storageRootName = "dicomstore";
     public String storageFolder = "D0000000";
     public int storageIndex = 0;
 
-    // In-memory CSV Worklist Store
     private final List<String> csvData = new ArrayList<>();
     private boolean csvInitialized = false;
 
-    // Procedure Codes Store
     private final Map<String, Integer> accessionImageCount = new HashMap<>();
     public final List<ProcCodeEntry> procCodes = new ArrayList<>();
     public boolean procCodesLoaded = false;
 
-    // Patient Directory Store (patients.csv)
     private String patientsCsvData = null;
     private int ptsNameColIdx = -1;
     private int ptsIdColIdx = 0;
     private int ptsBirthdateColIdx = -1;
     private int ptsSexColIdx = -1;
 
-    // Console Log Buffer
     private final List<String> logBuffer = new ArrayList<>();
     private LogListener logListener;
     private final Random random = new Random();
 
-public RisDataStore(Context context) {
-    dataDir = context.getExternalFilesDir(null);
-    if (dataDir == null) {
-        dataDir = context.getFilesDir();
+    public RisDataStore(Context context) {
+        File publicDir = Environment.getExternalStorageDirectory();
+        dataDir = new File(publicDir, "RisServerData");
+
+        if (!dataDir.exists()) {
+            dataDir.mkdirs();
+        }
+
+        iniFile = new File(dataDir, "RIS_SERVER.ini");
+        logFile = new File(dataDir, "ris_server.log");
+        cStoreFile = new File(dataDir, CSTORE_CSV_NAME);
+
+        loadConfig();
+        ensureCsvInitialized();
+        resetWorklistToHeader(); 
+        loadProcedureCodes();
+        loadCStoreTracking();
     }
-    if (!dataDir.exists()) {
-        dataDir.mkdirs();
-    }
-
-    iniFile = new File(dataDir, "RIS_SERVER.ini");
-    logFile = new File(dataDir, "ris_server.log");
-    cStoreFile = new File(dataDir, CSTORE_CSV_NAME);
-
-    loadConfig();
-    ensureCsvInitialized();
-    resetWorklistToHeader();      // also seeds the Unlinked Images row
-    loadProcedureCodes();
-    loadCStoreTracking();
-}
-
-//public RisDataStore(Context context) {
-    // Target a public shared folder on the primary shared storage (accessible to other apps)
- //   File publicDir = android.os.Environment.getExternalStorageDirectory();
-  //  dataDir = new File(publicDir, "RisServerData");
-
-  //  if (!dataDir.exists()) {
-  //      dataDir.mkdirs();
-  //  }
-
-  //  iniFile = new File(dataDir, "RIS_SERVER.ini");
-  //  logFile = new File(dataDir, "ris_server.log");
-  //  cStoreFile = new File(dataDir, CSTORE_CSV_NAME);
-
-  //  loadConfig();
-  //  ensureCsvInitialized();
- //   resetWorklistToHeader();
- //   loadProcedureCodes();
- //   loadCStoreTracking();
-//}
 
     public void setLogListener(LogListener listener) {
         this.logListener = listener;
@@ -193,7 +165,6 @@ public RisDataStore(Context context) {
         if (logListener != null) logListener.onStatusChanged();
     }
 
-    // ===== INI Configuration =====
     public void setAeTitle(String src) {
         if (src == null || src.trim().isEmpty()) src = "PACS";
         aeCalled = src.trim();
@@ -225,7 +196,6 @@ public RisDataStore(Context context) {
             telnetTimeout = parseIntSafe(map.get("telnettimeout"), 10);
             debugLog = parseIntSafe(map.get("debuglog"), 1);
 
-            // Storage config
             storageRootName = map.getOrDefault("storageroot", "dicomstore").trim();
             storageFolder = map.getOrDefault("storagefolder", "D0000000").trim();
             storageIndex = parseIntSafe(map.get("storageindex"), 0);
@@ -261,7 +231,6 @@ public RisDataStore(Context context) {
         try { return Integer.parseInt(s.trim()); } catch (Exception e) { return def; }
     }
 
-    // ===== Formatting Helpers =====
     public static String stripDashes(String s) {
         return s == null ? "" : s.replace("-", "");
     }
@@ -296,7 +265,6 @@ public RisDataStore(Context context) {
         }
     }
 
-    // ===== CSV Parsing & Worklist Store =====
     public static String[] parseCsvLineToEntry(String line) {
         String[] entry = new String[FIELD_COUNT];
         for (int i = 0; i < FIELD_COUNT; i++) entry[i] = "";
@@ -373,14 +341,9 @@ public RisDataStore(Context context) {
         return Math.max(0, csvData.size() - 1);
     }
 
-    /**
-     * Ensure the Unlinked Images row exists in the worklist.
-     * Inserted with Status 5 (DEPARTED) so it is excluded from modality C-FIND results.
-     */
     public synchronized void ensureUnlinkedPatientExists() {
         ensureCsvInitialized();
 
-        // Already present?
         for (int i = 1; i < csvData.size(); i++) {
             String[] existing = parseCsvLineToEntry(csvData.get(i));
             if (UNLINKED_PATIENT_NAME.equals(existing[0])
@@ -390,33 +353,33 @@ public RisDataStore(Context context) {
         }
 
         String[] entry = new String[FIELD_COUNT];
-        entry[0] = UNLINKED_PATIENT_NAME;                 // PatientName
-        entry[1] = UNLINKED_PATIENT_ID;                   // PatientID
-        entry[2] = "";                                    // BirthDate
-        entry[3] = "";                                    // Sex
-        entry[4] = "";                                    // ReqPhys
-        entry[5] = "";                                    // ReqSvc
-        entry[6] = "";                                    // ProcDesc
-        entry[7] = "";                                    // Reason
-        entry[8] = UNLINKED_ACCESSION;                    // Accession
-        entry[9] = "";                                    // ProcID
-        entry[10] = "LOW";                                // Priority
-        entry[11] = aeCalled;                             // StationAE
-        entry[12] = formatDate8(new Date());              // StartDate YYYYMMDD
-        entry[13] = "000000";                             // StartTime HHMMSS
-        entry[14] = "";                                   // PerfPhys
-        entry[15] = "Studies received without accession";  // SPSDesc
-        entry[16] = UNLINKED_PATIENT_ID;                  // SPSID
-        entry[17] = "";                                   // StationName
-        entry[18] = "";                                   // Location
-        entry[19] = "5";                                  // Status = DEPARTED
-        entry[20] = "";                                   // Modality
-        entry[21] = "";                                   // RefPhys
-        entry[22] = "No Accession Number";                // StudyDesc
-        entry[23] = "";                                   // ProtoCode
-        entry[24] = "";                                   // ProtoScheme
-        entry[25] = "";                                   // ProtoMeaning
-        entry[26] = "1.2.840.113619.2.1.UNLINKED";        // StudyUID
+        entry[0] = UNLINKED_PATIENT_NAME;                 
+        entry[1] = UNLINKED_PATIENT_ID;                   
+        entry[2] = "";                                    
+        entry[3] = "";                                    
+        entry[4] = "";                                    
+        entry[5] = "";                                    
+        entry[6] = "";                                    
+        entry[7] = "";                                    
+        entry[8] = UNLINKED_ACCESSION;                    
+        entry[9] = "";                                    
+        entry[10] = "LOW";                                
+        entry[11] = aeCalled;                             
+        entry[12] = formatDate8(new Date());              
+        entry[13] = "000000";                             
+        entry[14] = "";                                   
+        entry[15] = "Studies received without accession";  
+        entry[16] = UNLINKED_PATIENT_ID;                  
+        entry[17] = "";                                   
+        entry[18] = "";                                   
+        entry[19] = "5";                                  
+        entry[20] = "";                                   
+        entry[21] = "";                                   
+        entry[22] = "No Accession Number";                
+        entry[23] = "";                                   
+        entry[24] = "";                                   
+        entry[25] = "";                                   
+        entry[26] = "1.2.840.113619.2.1.UNLINKED";        
 
         csvData.add(buildCsvLineFromEntry(entry));
         writeLog("Created 'Unlinked Images' worklist row (DEPARTED)");
@@ -428,16 +391,11 @@ public RisDataStore(Context context) {
         return sdf.format(d);
     }
 
-    /** True if the accession belongs to the Unlinked Images bucket. */
     public static boolean isUnlinkedAccession(String acc) {
         return acc != null && acc.trim().toUpperCase(Locale.US)
                 .startsWith(UNLINKED_ACCESSION_PREFIX);
     }
 
-    /**
-     * Normalize and upsert entry. An empty accession is redirected into the
-     * Unlinked Images bucket rather than being rejected.
-     */
     public synchronized boolean normalizeAndUpsertEntry(String[] entry) {
         ensureCsvInitialized();
         entry[2] = stripDashes(entry[2]);
@@ -445,7 +403,6 @@ public RisDataStore(Context context) {
         entry[13] = stripColons(entry[13]);
         entry[0] = formatPatientName(entry[0]);
 
-        // Empty accession -> Unlinked Images bucket
         String acc = entry[8];
         if (acc == null || acc.trim().isEmpty()) {
             entry[8] = UNLINKED_ACCESSION;
@@ -484,7 +441,6 @@ public RisDataStore(Context context) {
         if (acc == null || acc.trim().isEmpty()) return;
         acc = acc.trim();
 
-        // The Unlinked Images bucket is permanent
         if (isUnlinkedAccession(acc)) {
             writeLog("Refused deletion of Unlinked Images row");
             return;
@@ -500,9 +456,6 @@ public RisDataStore(Context context) {
         }
     }
 
-    // ===== C-STORE Tracking CSV =====
-
-    /** Create the tracking CSV with a header only if it is missing or empty. */
     public synchronized void loadCStoreTracking() {
         if (!cStoreFile.exists() || cStoreFile.length() == 0) {
             writeCStoreEntry("Accession", "PatientName", "PatientID", "StudyUID", "SOPInstanceUID",
@@ -510,7 +463,6 @@ public RisDataStore(Context context) {
         }
     }
 
-    /** Append an entry to the c-store CSV */
     public synchronized boolean writeCStoreEntry(String... values) {
         if (values == null || values.length == 0) return false;
         StringBuilder sb = new StringBuilder();
@@ -536,7 +488,6 @@ public RisDataStore(Context context) {
         return true;
     }
 
-    /** Record a successfully stored image */
     public synchronized boolean recordStoredImage(String accession, String patientName, String patientID,
                                                   String studyUID, String sopInstanceUID,
                                                   String folder, String filename,
@@ -545,7 +496,6 @@ public RisDataStore(Context context) {
                                folder, filename, modality, String.valueOf(fileSize), timestamp);
     }
 
-    /** Get list of all stored images for a given accession ("" = all images) */
     public synchronized List<StoredImageInfo> getStoredImagesForAccession(String accession) {
         List<StoredImageInfo> result = new ArrayList<>();
         if (!cStoreFile.exists()) return result;
@@ -553,7 +503,7 @@ public RisDataStore(Context context) {
         String want = accession == null ? "" : accession.trim();
 
         try (BufferedReader br = new BufferedReader(new FileReader(cStoreFile))) {
-            String line = br.readLine(); // skip header
+            String line = br.readLine(); 
             if (line == null) return result;
 
             while ((line = br.readLine()) != null) {
@@ -580,7 +530,6 @@ public RisDataStore(Context context) {
         return result;
     }
 
-    /** Get image count for an accession */
     public synchronized int getImageCountForAccession(String accession) {
         if (accession == null || accession.trim().isEmpty()) return 0;
         int count = getStoredImagesForAccession(accession).size();
@@ -588,7 +537,6 @@ public RisDataStore(Context context) {
         return count;
     }
 
-    /** Get total image count across all worklist entries */
     public synchronized int getTotalImageCount() {
         int total = 0;
         List<String> rows = getCsvRowsSnapshot();
@@ -600,7 +548,6 @@ public RisDataStore(Context context) {
         return total;
     }
 
-    /** Get file path for an image by SOP instance UID */
     public synchronized File getImageFilePath(String sopInstanceUID) {
         for (StoredImageInfo info : getAllStoredImages()) {
             if (info.sopInstanceUID != null && info.sopInstanceUID.equals(sopInstanceUID)) {
@@ -610,12 +557,9 @@ public RisDataStore(Context context) {
         return null;
     }
 
-    /** Get ALL stored images (for admin view) */
     public synchronized List<StoredImageInfo> getAllStoredImages() {
         return getStoredImagesForAccession("");
     }
-
-    // ===== DICOM Storage Path Allocation =====
 
     public File getStorageRoot() {
         File root = new File(dataDir, storageRootName);
@@ -623,7 +567,6 @@ public RisDataStore(Context context) {
         return root;
     }
 
-    /** Returns the next free image file, rolling D0000000 -> D0000001 at I9999999. */
     public synchronized File allocateImageFile() {
         if (storageIndex >= MAX_FILES_PER_FOLDER) {
             int n = 0;
@@ -641,12 +584,10 @@ public RisDataStore(Context context) {
         return f;
     }
 
-    /** Relative HTTP path for an image */
     public String getImageUrl(String folder, String filename) {
         return "/images/" + storageRootName + "/" + folder + "/" + filename;
     }
 
-    // ===== Procedure Codes (procedurecodes.csv) =====
     public synchronized void loadProcedureCodes() {
         procCodes.clear();
         File f = new File(dataDir, "procedurecodes.csv");
@@ -676,7 +617,6 @@ public RisDataStore(Context context) {
         }
     }
 
-    // ===== Patient Directory Filtering (patients.csv) =====
     private String loadAndConvertCsv(File file) {
         if (!file.exists()) return null;
         try (FileInputStream fis = new FileInputStream(file)) {

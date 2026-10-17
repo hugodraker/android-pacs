@@ -486,8 +486,9 @@ public class DicomScpServer {
     /** Write DICOM Part 10 file with meta-header */
     private void writePart10(File dest, byte[] ds, String sopClassUid, String sopInstUid) throws IOException {
         ByteArrayOutputStream meta = new ByteArrayOutputStream();
-        // Group Length placeholder
-        meta.write(new byte[]{0x02, 0x00, 0x00, 0x00, 4, 0, 0, 0, 0, 0, 0, 0});
+        
+        // (0002,0000) File Meta Information Group Length, VR=UL, Length=4
+        meta.write(new byte[]{0x02, 0x00, 0x00, 0x00, 'U', 'L', 0x04, 0x00, 0x00, 0x00, 0x00, 0x00});
         
         // Media Storage SOP Class UID (0002,0002) UI
         writeMetaElement(meta, 0x0002, 0x0002, "UI", 
@@ -505,9 +506,9 @@ public class DicomScpServer {
         writeMetaElement(meta, 0x0002, 0x0012, "UI", 
                        "1.2.276.0.723.1.99".getBytes(StandardCharsets.US_ASCII));
 
-        // Fill in Group Length
+        // Fill in Group Length (total length minus the 12 bytes of the group length element itself)
         byte[] m = meta.toByteArray();
-        int gl = m.length - 20;
+        int gl = m.length - 12;
         m[8] = (byte)(gl & 0xFF);
         m[9] = (byte)((gl >> 8) & 0xFF);
         m[10] = (byte)((gl >> 16) & 0xFF);
@@ -527,15 +528,18 @@ public class DicomScpServer {
         out.write(e & 0xFF); out.write((e >> 8) & 0xFF);
         out.write(vr.charAt(0)); out.write(vr.charAt(1));
         
+        int pad = v.length % 2; // 1 if odd, 0 if even
+        int totalLen = v.length + pad; // Length field MUST include the pad byte
+
         if (LONG_VRS.contains(vr)) {
-            out.write(0); out.write(0);
-            out.write(v.length & 0xFF); out.write((v.length >> 8) & 0xFF);
-            out.write((v.length >> 16) & 0xFF); out.write((v.length >> 24) & 0xFF);
+            out.write(0); out.write(0); // Reserved 2 bytes
+            out.write(totalLen & 0xFF); out.write((totalLen >> 8) & 0xFF);
+            out.write((totalLen >> 16) & 0xFF); out.write((totalLen >> 24) & 0xFF);
         } else {
-            out.write(v.length & 0xFF); out.write((v.length >> 8) & 0xFF);
+            out.write(totalLen & 0xFF); out.write((totalLen >> 8) & 0xFF);
         }
         out.write(v, 0, v.length);
-        if ((v.length & 1) == 1) out.write(0);  // Pad odd-length values
+        if (pad == 1) out.write(0);  // Pad odd-length values with NULL byte
     }
 
     /** Walk DICOM dataset and extract element values */
