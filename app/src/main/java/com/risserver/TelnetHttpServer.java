@@ -30,7 +30,8 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
-public class TelnetHttpServer {private final RisDataStore store;
+public class TelnetHttpServer {
+    private final RisDataStore store;
     private ServerSocket telnetServerSocket;
     private ServerSocket httpServerSocket;
     private volatile boolean running = false;
@@ -290,6 +291,90 @@ public class TelnetHttpServer {private final RisDataStore store;
         }
         return bodyStr.substring(startVal, endVal);
     }
+    
+    private byte[] extractMultipartBinaryFile(byte[] req, int bodyOff, String boundary, String fieldName) {
+        byte[] bnd = ("--" + boundary).getBytes(StandardCharsets.UTF_8);
+        byte[] nameMatch = ("name=\"" + fieldName + "\"").getBytes(StandardCharsets.UTF_8);
+        byte[] crlfcrlf = {'\r','\n','\r','\n'};
+        int pos = bodyOff;
+        while (true) {
+            int pStart = indexOf(req, bnd, pos);
+            if (pStart < 0) break;
+            int pHeaderEnd = indexOf(req, crlfcrlf, pStart);
+            if (pHeaderEnd < 0) break;
+            
+            boolean isField = false;
+            for (int i = pStart; i < pHeaderEnd; i++) {
+                if (matchAt(req, nameMatch, i)) { isField = true; break; }
+            }
+            
+            if (isField) {
+                int dataStart = pHeaderEnd + 4;
+                byte[] nextBnd = ("\r\n--" + boundary).getBytes(StandardCharsets.UTF_8);
+                int dataEnd = indexOf(req, nextBnd, dataStart);
+                if (dataEnd < 0) {
+                    nextBnd = ("--" + boundary).getBytes(StandardCharsets.UTF_8);
+                    dataEnd = indexOf(req, nextBnd, dataStart);
+                }
+                if (dataEnd < 0) dataEnd = req.length;
+                byte[] res = new byte[dataEnd - dataStart];
+                System.arraycopy(req, dataStart, res, 0, res.length);
+                return res;
+            }
+            pos = pHeaderEnd + 4;
+        }
+        return null;
+    }
+
+    private int indexOf(byte[] data, byte[] pattern, int start) {
+        for (int i = start; i <= data.length - pattern.length; i++) {
+            boolean match = true;
+            for (int j = 0; j < pattern.length; j++) {
+                if (data[i+j] != pattern[j]) { match = false; break; }
+            }
+            if (match) return i;
+        }
+        return -1;
+    }
+
+    private boolean matchAt(byte[] data, byte[] pattern, int pos) {
+        if (pos + pattern.length > data.length) return false;
+        for(int i=0; i<pattern.length; i++) if(data[pos+i] != pattern[i]) return false;
+        return true;
+    }
+    
+    private String extractAccession(byte[] buf) {
+        byte tg0 = 0x08, tg1 = 0x00, tg2 = 0x50, tg3 = 0x00;
+        for (int i = 0; i <= buf.length - 10; i++) {
+            if (buf[i] == tg0 && buf[i+1] == tg1 && buf[i+2] == tg2 && buf[i+3] == tg3) {
+                char v1 = (char) (buf[i+4] & 0xFF);
+                char v2 = (char) (buf[i+5] & 0xFF);
+                String vr = "" + v1 + v2;
+                int vlen, offset;
+                
+                boolean isKnownVR = (v1 >= 'A' && v1 <= 'Z' && v2 >= 'A' && v2 <= 'Z');
+                if (isKnownVR) {
+                    if (vr.equals("OB") || vr.equals("OW") || vr.equals("SQ") || vr.equals("UN") || vr.equals("OF") || vr.equals("UT")) {
+                        if (i + 12 > buf.length) break;
+                        vlen = (buf[i+8] & 0xFF) | ((buf[i+9] & 0xFF) << 8) | ((buf[i+10] & 0xFF) << 16) | ((buf[i+11] & 0xFF) << 24);
+                        offset = 12;
+                    } else {
+                        vlen = (buf[i+6] & 0xFF) | ((buf[i+7] & 0xFF) << 8);
+                        offset = 8;
+                    }
+                } else {
+                    vlen = (buf[i+4] & 0xFF) | ((buf[i+5] & 0xFF) << 8) | ((buf[i+6] & 0xFF) << 16) | ((buf[i+7] & 0xFF) << 24);
+                    offset = 8;
+                }
+                
+                if (vlen > 0 && vlen < 128 && i + offset + vlen <= buf.length) {
+                    return new String(buf, i + offset, vlen, StandardCharsets.UTF_8).trim();
+                }
+                return "";
+            }
+        }
+        return "";
+    }
 
     private void handleHttpClient(Socket client) {
         try {
@@ -495,6 +580,75 @@ public class TelnetHttpServer {private final RisDataStore store;
             }
 
             if (method.equals("POST")) {
+                
+                if (url.startsWith("/replace?sop=")) {
+                    String sop = url.substring(13);
+                    File f = store.getImageFilePath(sop);
+                    if (f != null && f.exists()) {
+                        byte[] fileData = extractMultipartBinaryFile(fullReqBytes, headerEnd + 4, boundary, "file");
+                        if (fileData != null && fileData.length > 0) {
+                            try (java.io.FileOutputStream fos = new java.io.FileOutputStream(f)) {
+                                fos.write(fileData);
+                            }
+                            String acc = extractAccession(fileData);
+                            if (acc.isEmpty()) {
+                                String askHtml = HTML_START + "<h2>File Replaced Successfully</h2>" +
+                                    "<div class='query-box'>" +
+                                    "<p>The uploaded DICOM file is missing an Accession Number.</p>" +
+                                    "<p>Would you like to write the Worklist patient data (Accession, Name, DOB, Patient ID) into this file?</p>" +
+                                    "<form method='POST' action='/patch?sop=" + sop + "'>" +
+                                    "<button type='submit' class='top-btn bg-green'>Yes, Write Data</button> " +
+                                    "<a href='/' class='top-btn bg-blue' style='text-decoration:none;'>No, Keep as is</a>" +
+                                    "</form></div>" + HTML_END;
+                                sendHttpResponse(out, "200 OK", "text/html; charset=utf-8", askHtml);
+                                return;
+                            }
+                        }
+                    }
+                    sendHttpResponse(out, "200 OK", "text/html; charset=utf-8", HTML_START + "<meta http-equiv='refresh' content='0; url=/' /><h2>Replaced</h2>" + HTML_END);
+                    return;
+                }
+
+                if (url.startsWith("/patch?sop=")) {
+                    String sop = url.substring(11);
+                    File f = store.getImageFilePath(sop);
+                    if (f != null && f.exists()) {
+                        try {
+                            byte[] fileBytes = java.nio.file.Files.readAllBytes(f.toPath());
+                            String acc = "", pName = "", pId = "", dob = "";
+                            for (RisDataStore.StoredImageInfo info : store.getAllStoredImages()) {
+                                if (info.sopInstanceUID.equals(sop)) {
+                                    acc = info.accession;
+                                    break;
+                                }
+                            }
+                            if (!acc.isEmpty()) {
+                                for (String row : store.getCsvRowsSnapshot()) {
+                                    String[] vals = RisDataStore.parseCsvLineToEntry(row);
+                                    if (vals.length > 8 && vals[8].equals(acc)) {
+                                        pName = vals[0];
+                                        pId = vals[1];
+                                        dob = vals[2];
+                                        break;
+                                    }
+                                }
+                                boolean changed = false;
+                                changed |= DicomScpServer.patchTagInPlace(fileBytes, 0x0010, 0x0010, pName);
+                                changed |= DicomScpServer.patchTagInPlace(fileBytes, 0x0010, 0x0020, pId);
+                                changed |= DicomScpServer.patchTagInPlace(fileBytes, 0x0010, 0x0030, dob);
+                                changed |= DicomScpServer.patchTagInPlace(fileBytes, 0x0008, 0x0050, acc);
+                                if (changed) {
+                                    try (java.io.FileOutputStream fos = new java.io.FileOutputStream(f)) {
+                                        fos.write(fileBytes);
+                                    }
+                                }
+                            }
+                        } catch (Exception e) {}
+                    }
+                    sendHttpResponse(out, "200 OK", "text/html; charset=utf-8", HTML_START + "<meta http-equiv='refresh' content='0; url=/' /><h2>Patched</h2>" + HTML_END);
+                    return;
+                }
+
                 if (url.equals("/settings/update_pwd")) {
                     String newPwd = extractMultipartField(bodyStr, "newPwd", boundary);
                     if (newPwd == null) {
@@ -704,10 +858,13 @@ public class TelnetHttpServer {private final RisDataStore store;
                     sb.append("<td style='white-space:nowrap;'>");
                     for (int imgIdx = 0; imgIdx < images.size(); imgIdx++) {
                         RisDataStore.StoredImageInfo img = images.get(imgIdx);
-                        sb.append("<div style='margin-bottom:4px; font-size:12px;'>")
-                          .append(img.modality).append(" #").append(imgIdx + 1).append(": ")
+                        sb.append("<div style='margin-bottom:4px; font-size:12px; display:flex; align-items:center; gap:5px;'>")
+                          .append("<span>").append(img.modality).append(" #").append(imgIdx + 1).append(":</span> ")
                           .append("<a href='/download?sop=").append(img.sopInstanceUID).append("' style='color:#2196F3;text-decoration:none;font-weight:bold;'>DL .dcm</a> | ")
-                          .append("<a href='/header?sop=").append(img.sopInstanceUID).append("' style='color:#9c27b0;text-decoration:none;font-weight:bold;'>Header</a></div>");
+                          .append("<a href='/header?sop=").append(img.sopInstanceUID).append("' style='color:#9c27b0;text-decoration:none;font-weight:bold;'>Header</a> | ")
+                          .append("<form method='POST' action='/replace?sop=").append(img.sopInstanceUID).append("' enctype='multipart/form-data' style='margin:0; padding:0; display:inline-block;'>")
+                          .append("<label style='cursor:pointer; color:#f44336; font-weight:bold; text-decoration:underline;'>Replace<input type='file' name='file' accept='.dcm' style='display:none;' onchange='this.form.submit()'></label>")
+                          .append("</form></div>");
                     }
                     sb.append("</td>");
                 } else {
@@ -820,7 +977,8 @@ public class TelnetHttpServer {private final RisDataStore store;
         sb.append(HTML_END);
         return sb.toString();
     }
-private void sendHttpResponse(OutputStream out, String status, String contentType, String body) throws IOException {
+
+    private void sendHttpResponse(OutputStream out, String status, String contentType, String body) throws IOException {
         byte[] bodyBytes = body.getBytes(StandardCharsets.UTF_8);
         String hdr = "HTTP/1.1 " + status + "\r\n" +
                      "Content-Type: " + contentType + "\r\n" +
