@@ -12,6 +12,7 @@ package com.hugo.risserver;
 
 import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.net.BindException;
@@ -20,9 +21,11 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 
 public class DicomScpServer {
@@ -30,10 +33,37 @@ public class DicomScpServer {
     private ServerSocket serverSocket;
     private volatile boolean running = false;
 
+    // DICOM VR types
     private static final Set<String> KNOWN_VRS = new HashSet<>(Arrays.asList(
             "DA","TM","CS","SH","LO","PN","UI","AE","AS","IS","DS","ST","LT","UT",
-            "OB","OW","SQ","UN","FD","FL","SL","SS","UL","US"
+            "OB","OW","SQ","UN","FD","FL","SL","SS","UL","US","OD","OL","OV","OF"
     ));
+    private static final Set<String> LONG_VRS = new HashSet<>(Arrays.asList("OB","OW","OF","SQ","UT","UN"));
+
+    // Command VR hints for Group 0x0000 elements (implicit VR only in command datasets)
+    private static final Map<Integer, String> COMMAND_VRS = new HashMap<>();
+    static {
+        COMMAND_VRS.put(0x00000000, "UL");
+        COMMAND_VRS.put(0x00000002, "UI");
+        COMMAND_VRS.put(0x00000100, "US");
+        COMMAND_VRS.put(0x00000110, "US");
+        COMMAND_VRS.put(0x00000120, "US");
+        COMMAND_VRS.put(0x00000700, "US");
+        COMMAND_VRS.put(0x00000800, "US");
+        COMMAND_VRS.put(0x00000900, "US");
+        COMMAND_VRS.put(0x00000902, "LO");
+        COMMAND_VRS.put(0x00001000, "UI");
+        COMMAND_VRS.put(0x00001001, "UI");
+    }
+
+    // Per-connection state
+    private ByteArrayOutputStream findCmd = new ByteArrayOutputStream();
+    private ByteArrayOutputStream findData = new ByteArrayOutputStream();
+    private int findPcId = 0;
+    private int findMsgId = 0;
+    private int findCommand = 0;
+    private String findSopClassUid = "";
+    private static final int MAX_STORE_BYTES = 96 * 1024 * 1024; // 96MB limit
 
     public DicomScpServer(RisDataStore store) {
         this.store = store;
@@ -84,11 +114,12 @@ public class DicomScpServer {
         try (DataInputStream in = new DataInputStream(client.getInputStream());
              OutputStream out = client.getOutputStream()) {
 
-            ByteArrayOutputStream findCmd = new ByteArrayOutputStream();
-            ByteArrayOutputStream findData = new ByteArrayOutputStream();
-            int findPcId = 0;
-            int findMsgId = 0;
-            int findCommand = 0;
+            findCmd.reset();
+            findData.reset();
+            findPcId = 0;
+            findMsgId = 0;
+            findCommand = 0;
+            findSopClassUid = "";
 
             while (running) {
                 byte[] hdr = new byte[6];
@@ -135,34 +166,40 @@ public class DicomScpServer {
                                 findPcId = pcId;
                                 if (isLastFrag) {
                                     byte[] cBuf = findCmd.toByteArray();
-                                    findCommand = 0;
-                                    findMsgId = 0;
-                                    for (int i = 0; i <= cBuf.length - 10; i++) {
-                                        if (cBuf[i] == 0x00 && cBuf[i+1] == 0x00 &&
-                                            cBuf[i+2] == 0x00 && cBuf[i+3] == 0x01 &&
-                                            cBuf[i+4] == 0x02 && cBuf[i+5] == 0x00) {
-                                            findCommand = (cBuf[i+8] & 0xFF) | ((cBuf[i+9] & 0xFF) << 8);
-                                        }
-                                        if (cBuf[i] == 0x00 && cBuf[i+1] == 0x00 &&
-                                            cBuf[i+2] == 0x20 && cBuf[i+3] == 0x01 &&
-                                            cBuf[i+4] == 0x02 && cBuf[i+5] == 0x00) {
-                                            findMsgId = (cBuf[i+8] & 0xFF) | ((cBuf[i+9] & 0xFF) << 8);
-                                        }
-                                    }
+                                    Map<Integer, String> ce = new HashMap<>();
+                                    walkElements(cBuf, 0, cBuf.length, true, ce, 0);
+                                    findCommand = parseIntOr(ce.get(0x00000100), 0);
+                                    findMsgId = parseIntOr(ce.get(0x00000120), 0);
+                                    findSopClassUid = ce.getOrDefault(0x00000002, "");
+                                    findCmd.reset();
                                     if (findCommand == 0x0030) {
                                         handleCEchoRq(out, findPcId, findMsgId);
-                                        findCmd.reset();
                                         findData.reset();
+                                        findCommand = 0;
                                     }
                                 }
                             } else {
+                                // Check for dataset size limit before adding
+                                if (findData.size() + dataLen > MAX_STORE_BYTES) {
+                                    store.writeLog("WARN: dataset exceeds " + MAX_STORE_BYTES + " bytes, discarding");
+                                    findCmd.reset();
+                                    findData.reset();
+                                    findCommand = 0;
+                                    pos += 4 + pdvLen;
+                                    continue;
+                                }
+                                
                                 findData.write(pdu, dataOff, dataLen);
                                 if (isLastFrag) {
+                                    byte[] dataBytes = findData.toByteArray();
                                     if (findCommand == 0x0020) {
-                                        handleCFindRq(out, findPcId, findMsgId, findData.toByteArray());
+                                        handleCFindRq(out, findPcId, findMsgId, dataBytes);
+                                    } else if (findCommand == 0x0001) {
+                                        handleCStoreRq(out, findPcId, findMsgId, dataBytes);
                                     }
                                     findCmd.reset();
                                     findData.reset();
+                                    findCommand = 0;
                                 }
                             }
                             pos += 4 + pdvLen;
@@ -223,6 +260,12 @@ public class DicomScpServer {
                 byte[] tsUid = "1.2.840.10008.1.2".getBytes(StandardCharsets.US_ASCII);
                 System.arraycopy(tsHdr, 0, acPdu, offset, 4); offset += 4;
                 System.arraycopy(tsUid, 0, acPdu, offset, tsUid.length); offset += tsUid.length;
+                
+                // Also accept Implicit VR Extended (1.2.840.10008.1.2.1) for robustness
+                byte[] tsHdrExt = { 0x40, 0x00, 0x00, 0x15 };
+                byte[] tsUidExt = "1.2.840.10008.1.2.1".getBytes(StandardCharsets.US_ASCII);
+                System.arraycopy(tsHdrExt, 0, acPdu, offset, 4); offset += 4;
+                System.arraycopy(tsUidExt, 0, acPdu, offset, tsUidExt.length); offset += tsUidExt.length;
             }
             i += 4 + itemLen;
         }
@@ -362,6 +405,222 @@ public class DicomScpServer {
         sendPDataTf(out, pcId, 0x03, patchGroupLength(endCmd.toByteArray()));
     }
 
+    /**
+     * Handle C-STORE-RQ — receives and saves DICOM images
+     * Falls back to Unlinked Patient when accession is missing/empty
+     */
+    private void handleCStoreRq(OutputStream out, int pcId, int msgId, byte[] ds) throws IOException {
+        Map<Integer, String> el = new HashMap<>();
+        walkElements(ds, 0, ds.length, false, el, 0);
+
+        String sopClassUid = el.getOrDefault(0x00080016, findSopClassUid);
+        String sopInstUid = el.getOrDefault(0x00080018, "");
+        String modality = el.getOrDefault(0x00080060, "OT");
+        String patId = el.getOrDefault(0x00100020, "");
+        String patName = el.getOrDefault(0x00100010, "");
+        String studyUid = el.getOrDefault(0x0020000D, "");
+        String accNum = el.getOrDefault(0x00080050, "").trim();
+
+        // Check if accession is empty/null/whitespace
+        boolean isUnlinked = accNum.isEmpty();
+        String effectiveAcc = accNum;
+        String effectivePatName = patName;
+        String effectivePatId = patId;
+
+        if (isUnlinked) {
+            // File under the shared Unlinked Images bucket
+            effectiveAcc = RisDataStore.UNLINKED_ACCESSION;
+            effectivePatName = RisDataStore.UNLINKED_PATIENT_NAME;
+            effectivePatId = RisDataStore.UNLINKED_PATIENT_ID;
+
+            store.writeLog("C-STORE: no accession, filing under Unlinked Images");
+        }
+
+        int status = 0x0000;
+        String folder = "", filename = "";
+
+        try {
+            File dest = store.allocateImageFile();
+            folder = dest.getParentFile().getName();
+            filename = dest.getName();
+
+            writePart10(dest, ds, sopClassUid, sopInstUid);
+
+            java.text.SimpleDateFormat tsFmt = new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US);
+            store.recordStoredImage(effectiveAcc, effectivePatName, effectivePatId, studyUid, sopInstUid,
+                                   folder, filename, modality, dest.length(), tsFmt.format(new Date()));
+
+            store.getImageCountForAccession(effectiveAcc);
+            store.writeLog("C-STORE OK -> " + folder + "/" + filename + " (" + ds.length + " B) mod=" + modality +
+                          " pid=" + patId + " acc=" + effectiveAcc + (isUnlinked ? " [UNLINKED]" : ""));
+        } catch (Exception ex) {
+            status = 0xA700;
+            store.writeLog("C-STORE FAILED: " + ex.getMessage());
+        }
+
+        ByteArrayOutputStream cmd = new ByteArrayOutputStream();
+        dicomAddUl(cmd, 0x0000, 0x0000, 0);
+        dicomAddStr(cmd, 0x0000, 0x0002, sopClassUid.isEmpty() ? "1.2.840.10008.5.1.4.1.1.2" : sopClassUid);
+        dicomAddUs(cmd, 0x0000, 0x0100, 0x8001);
+        dicomAddUs(cmd, 0x0000, 0x0120, msgId);
+        dicomAddUs(cmd, 0x0000, 0x0800, 0x0102);
+        dicomAddUs(cmd, 0x0000, 0x0900, status);
+        if (!sopInstUid.isEmpty()) dicomAddStr(cmd, 0x0000, 0x1000, sopInstUid);
+
+        sendPDataTf(out, pcId, 0x03, patchGroupLength(cmd.toByteArray()));
+    }
+
+    /** Write DICOM Part 10 file with meta-header */
+    private void writePart10(File dest, byte[] ds, String sopClassUid, String sopInstUid) throws IOException {
+        ByteArrayOutputStream meta = new ByteArrayOutputStream();
+        // Group Length placeholder
+        meta.write(new byte[]{0x02, 0x00, 0x00, 0x00, 4, 0, 0, 0, 0, 0, 0, 0});
+        
+        // Media Storage SOP Class UID (0002,0002) UI
+        writeMetaElement(meta, 0x0002, 0x0002, "UI", 
+                       (sopClassUid.isEmpty() ? "1.2.840.10008.5.1.4.1.1.2" : sopClassUid).getBytes(StandardCharsets.US_ASCII));
+        
+        // Media Storage SOP Instance UID (0002,0003) UI
+        writeMetaElement(meta, 0x0002, 0x0003, "UI", 
+                       sopInstUid.isEmpty() ? "1.2.840.10008.1.2.0" : sopInstUid.getBytes(StandardCharsets.US_ASCII));
+        
+        // Transfer Syntax UID (0002,0010) UI - Implicit VR Little Endian
+        writeMetaElement(meta, 0x0002, 0x0010, "UI", 
+                       "1.2.840.10008.1.2".getBytes(StandardCharsets.US_ASCII));
+        
+        // Implementation Class UID (0002,0012) UI
+        writeMetaElement(meta, 0x0002, 0x0012, "UI", 
+                       "1.2.276.0.723.1.99".getBytes(StandardCharsets.US_ASCII));
+
+        // Fill in Group Length
+        byte[] m = meta.toByteArray();
+        int gl = m.length - 20;
+        m[8] = (byte)(gl & 0xFF);
+        m[9] = (byte)((gl >> 8) & 0xFF);
+        m[10] = (byte)((gl >> 16) & 0xFF);
+        m[11] = (byte)((gl >> 24) & 0xFF);
+
+        try (FileOutputStream fos = new FileOutputStream(dest)) {
+            byte[] preamble = new byte[128];
+            fos.write(preamble);
+            fos.write("DICM".getBytes(StandardCharsets.US_ASCII));
+            fos.write(m);
+            fos.write(ds);
+        }
+    }
+
+    private void writeMetaElement(ByteArrayOutputStream out, int g, int e, String vr, byte[] v) {
+        out.write(g & 0xFF); out.write((g >> 8) & 0xFF);
+        out.write(e & 0xFF); out.write((e >> 8) & 0xFF);
+        out.write(vr.charAt(0)); out.write(vr.charAt(1));
+        
+        if (LONG_VRS.contains(vr)) {
+            out.write(0); out.write(0);
+            out.write(v.length & 0xFF); out.write((v.length >> 8) & 0xFF);
+            out.write((v.length >> 16) & 0xFF); out.write((v.length >> 24) & 0xFF);
+        } else {
+            out.write(v.length & 0xFF); out.write((v.length >> 8) & 0xFF);
+        }
+        out.write(v, 0, v.length);
+        if ((v.length & 1) == 1) out.write(0);  // Pad odd-length values
+    }
+
+    /** Walk DICOM dataset and extract element values */
+    private static int walkElements(byte[] b, int start, int end, boolean forceImplicit,
+                                    Map<Integer, String> out, int depth) {
+        if (depth > 8) return end;
+        int pos = start;
+        while (pos + 8 <= end) {
+            int g = u16(b, pos);
+            int e = u16(b, pos + 2);
+
+            // Delimiters / Items
+            if (g == 0xFFFE) {
+                int len = i32(b, pos + 4);
+                if (e == 0xE000) {  // Item
+                    if (len == -1) {
+                        pos = walkElements(b, pos + 8, end, forceImplicit, out, depth + 1);
+                    } else {
+                        int itemEnd = Math.min(pos + 8 + len, end);
+                        pos = walkElements(b, pos + 8, itemEnd, forceImplicit, out, depth + 1);
+                    }
+                } else if (e == 0xE00D || e == 0xE0DD) {  // Delimiter
+                    return pos + 8;
+                } else {
+                    pos += 8;
+                }
+                continue;
+            }
+
+            int key = (g << 16) | e;
+            String vr = null;
+            boolean explicit = !forceImplicit;
+
+            // Try to detect VR from bytes
+            if (explicit && pos + 6 <= end) {
+                String cand = "" + (char)(b[pos + 4] & 0xFF) + (char)(b[pos + 5] & 0xFF);
+                if (KNOWN_VRS.contains(cand)) {
+                    vr = cand;
+                } else {
+                    explicit = false;
+                }
+            }
+
+            int len, valOff;
+            if (explicit && vr != null) {
+                if (LONG_VRS.contains(vr)) {
+                    len = i32(b, pos + 8);
+                    valOff = pos + 12;
+                } else {
+                    len = u16(b, pos + 6);
+                    valOff = pos + 8;
+                }
+            } else {
+                len = i32(b, pos + 4);
+                valOff = pos + 8;
+                if (g == 0x0000) {
+                    vr = COMMAND_VRS.get(key);
+                }
+            }
+
+            if (len == -1) {
+                pos = walkElements(b, valOff, end, forceImplicit, out, depth + 1);
+                continue;
+            }
+            if (len < 0 || valOff + len > end) return end;
+
+            if ("SQ".equals(vr)) {
+                pos = walkElements(b, valOff, valOff + len, forceImplicit, out, depth + 1);
+            } else if (!out.containsKey(key)) {
+                String s = decodeValue(b, valOff, len, vr);
+                if (s != null) out.put(key, s);
+                pos = valOff + len;
+            } else {
+                pos = valOff + len;
+            }
+        }
+        return pos;
+    }
+
+    private static String decodeValue(byte[] b, int off, int len, String vr) {
+        if (len <= 0) return null;
+        if ("US".equals(vr)) return String.valueOf(u16(b, off));
+        if ("SS".equals(vr)) return String.valueOf((short)(b[off] & 0xFF) << 8 | (b[off + 1] & 0xFF));
+        if ("UL".equals(vr)) return String.valueOf(i32(b, off));
+        if (len > 4096) return null;  // Skip large pixel data
+        return new String(b, off, len, StandardCharsets.UTF_8).replaceAll("[\\u0000 ]+$", "");
+    }
+
+    private static int u16(byte[] b, int o) { return (b[o] & 0xFF) | ((b[o + 1] & 0xFF) << 8); }
+    private static int i32(byte[] b, int o) {
+        return (b[o] & 0xFF) | ((b[o + 1] & 0xFF) << 8) | ((b[o + 2] & 0xFF) << 16) | ((b[o + 3] & 0xFF) << 24);
+    }
+
+    private static int parseIntOr(String s, int def) {
+        if (s == null) return def;
+        try { return Integer.parseInt(s.trim()); } catch (Exception e) { return def; }
+    }
+
     private boolean isFieldOmitted(int g, int e) {
         String omitted = store.omittedFields;
         if (omitted == null || omitted.isEmpty() || omitted.equals("0")) return false;
@@ -376,7 +635,7 @@ public class DicomScpServer {
         byte tg0 = (byte) (g & 0xFF), tg1 = (byte) ((g >> 8) & 0xFF);
         byte tg2 = (byte) (e & 0xFF), tg3 = (byte) ((e >> 8) & 0xFF);
 
-        for (int i = 0; i < buf.length - 8; i++) {
+        for (int i = 0; i <= buf.length - 10; i++) {
             if (buf[i] == tg0 && buf[i+1] == tg1 && buf[i+2] == tg2 && buf[i+3] == tg3) {
                 char v1 = (char) (buf[i+4] & 0xFF);
                 char v2 = (char) (buf[i+5] & 0xFF);
