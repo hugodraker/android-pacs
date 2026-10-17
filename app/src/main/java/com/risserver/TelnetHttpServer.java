@@ -500,7 +500,7 @@ public class TelnetHttpServer {
                                     changed |= DicomScpServer.patchTagInPlace(fileBytes, 0x0008, 0x0060, entry[20]);
                                     
                                     if (changed) {
-                                        try (FileOutputStream fos = new FileOutputStream(f)) {
+                                        try (java.io.FileOutputStream fos = new java.io.FileOutputStream(f)) {
                                             fos.write(fileBytes);
                                         }
                                         store.writeLog("Retroactively patched DICOM file tags: " + f.getName());

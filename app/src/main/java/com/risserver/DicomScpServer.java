@@ -732,6 +732,26 @@ public class DicomScpServer {
         out.write(v & 0xFF); out.write((v >> 8) & 0xFF);
         out.write((v >> 16) & 0xFF); out.write((v >> 24) & 0xFF);
     }
+    private void dicomSeqHdr(ByteArrayOutputStream out, int g, int e) {
+        out.write(g & 0xFF); out.write((g >> 8) & 0xFF);
+        out.write(e & 0xFF); out.write((e >> 8) & 0xFF);
+        out.write(0xFF); out.write(0xFF); out.write(0xFF); out.write(0xFF);
+    }
+
+    private void dicomItemHdr(ByteArrayOutputStream out) {
+        out.write(0xFE); out.write(0xFF); out.write(0x00); out.write(0xE0);
+        out.write(0xFF); out.write(0xFF); out.write(0xFF); out.write(0xFF);
+    }
+
+    private void dicomItemDelim(ByteArrayOutputStream out) {
+        out.write(0xFE); out.write(0xFF); out.write(0x0D); out.write(0xE0);
+        out.write(0x00); out.write(0x00); out.write(0x00); out.write(0x00);
+    }
+
+    private void dicomSeqDelim(ByteArrayOutputStream out) {
+        out.write(0xFE); out.write(0xFF); out.write(0xDD); out.write(0xE0);
+        out.write(0x00); out.write(0x00); out.write(0x00); out.write(0x00);
+    }
 }
 
 /* 
