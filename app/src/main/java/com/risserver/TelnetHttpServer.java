@@ -13,6 +13,7 @@ package com.hugo.risserver;
 import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileReader;
 import java.io.IOException;
 import java.io.InputStream;
@@ -24,7 +25,7 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
 import java.net.URLDecoder;
-import java.nio.charset.StandardCharsets;
+import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -135,14 +136,35 @@ public class TelnetHttpServer {
 
     public void start() {
         running = true;
-        new Thread(this::telnetAcceptLoop, "TelnetAcceptThread").start();
-        new Thread(this::httpAcceptLoop, "HttpAcceptThread").start();
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                telnetAcceptLoop();
+            }
+        }, "TelnetAcceptThread").start();
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                httpAcceptLoop();
+            }
+        }, "HttpAcceptThread").start();
     }
 
     public void stop() {
         running = false;
         try { if (telnetServerSocket != null) telnetServerSocket.close(); } catch (IOException ignored) {}
         try { if (httpServerSocket != null) httpServerSocket.close(); } catch (IOException ignored) {}
+    }
+
+    private byte[] readAllBytes(File file) throws IOException {
+        byte[] data = new byte[(int) file.length()];
+        FileInputStream fis = new FileInputStream(file);
+        try {
+            fis.read(data);
+        } finally {
+            fis.close();
+        }
+        return data;
     }
 
     // ===== Telnet Server =====
@@ -166,9 +188,14 @@ public class TelnetHttpServer {
             store.notifyStatusChanged();
 
             while (running && !telnetServerSocket.isClosed()) {
-                Socket client = telnetServerSocket.accept();
+                final Socket client = telnetServerSocket.accept();
                 store.writeLog("Telnet Client connected (" + client.getRemoteSocketAddress() + ")");
-                new Thread(() -> handleTelnetClient(client), "TelnetClientWorker").start();
+                new Thread(new Runnable() {
+                    @Override
+                    public void run() {
+                        handleTelnetClient(client);
+                    }
+                }, "TelnetClientWorker").start();
             }
         } catch (IOException e) {
             if (running) store.writeLog("ERROR: Failed to listen on Telnet port " + store.telnetPort);
@@ -179,9 +206,9 @@ public class TelnetHttpServer {
         try {
             client.setSoTimeout(Math.max(1, store.telnetTimeout) * 1000);
             OutputStream out = client.getOutputStream();
-            BufferedReader reader = new BufferedReader(new InputStreamReader(client.getInputStream(), StandardCharsets.UTF_8));
+            BufferedReader reader = new BufferedReader(new InputStreamReader(client.getInputStream(), Charset.forName("UTF-8")));
 
-            out.write("Connected to RIS Telnet Server. Waiting for data...\r\n".getBytes(StandardCharsets.UTF_8));
+            out.write("Connected to RIS Telnet Server. Waiting for data...\r\n".getBytes(Charset.forName("UTF-8")));
             out.flush();
 
             String line;
@@ -200,24 +227,24 @@ public class TelnetHttpServer {
                     for (int i = 1; i < rows.size(); i++) {
                         String rowStr = rows.get(i);
                         if (lineMatchesDisp(rowStr, param)) {
-                            out.write((rowStr + "\r\n").getBytes(StandardCharsets.UTF_8));
+                            out.write((rowStr + "\r\n").getBytes(Charset.forName("UTF-8")));
                             count++;
                         }
                     }
-                    out.write((count + " RESULTS\r\n").getBytes(StandardCharsets.UTF_8));
+                    out.write((count + " RESULTS\r\n").getBytes(Charset.forName("UTF-8")));
                     out.flush();
                 } else {
                     String[] entry = RisDataStore.parseCsvLineToEntry(pLine);
                     if (!RisDataStore.validateEntry(entry)) {
-                        out.write("INVALID LINE\r\n".getBytes(StandardCharsets.UTF_8));
+                        out.write("INVALID LINE\r\n".getBytes(Charset.forName("UTF-8")));
                         out.flush();
                     } else {
                         boolean updated = store.normalizeAndUpsertEntry(entry);
                         if (updated) {
-                            out.write("UPDATED\r\n".getBytes(StandardCharsets.UTF_8));
+                            out.write("UPDATED\r\n".getBytes(Charset.forName("UTF-8")));
                             store.writeLog("UPDATED Accession " + entry[8]);
                         } else {
-                            out.write("INSERTED\r\n".getBytes(StandardCharsets.UTF_8));
+                            out.write("INSERTED\r\n".getBytes(Charset.forName("UTF-8")));
                             store.writeLog("INSERTED Accession " + entry[8]);
                         }
                         out.flush();
@@ -261,8 +288,13 @@ public class TelnetHttpServer {
             store.notifyStatusChanged();
 
             while (running && !httpServerSocket.isClosed()) {
-                Socket client = httpServerSocket.accept();
-                new Thread(() -> handleHttpClient(client), "HttpClientWorker").start();
+                final Socket client = httpServerSocket.accept();
+                new Thread(new Runnable() {
+                    @Override
+                    public void run() {
+                        handleHttpClient(client);
+                    }
+                }, "HttpClientWorker").start();
             }
         } catch (IOException e) {
             if (running) store.writeLog("ERROR: Failed to listen on HTTP port " + store.httpPort);
@@ -293,8 +325,8 @@ public class TelnetHttpServer {
     }
     
     private byte[] extractMultipartBinaryFile(byte[] req, int bodyOff, String boundary, String fieldName) {
-        byte[] bnd = ("--" + boundary).getBytes(StandardCharsets.UTF_8);
-        byte[] nameMatch = ("name=\"" + fieldName + "\"").getBytes(StandardCharsets.UTF_8);
+        byte[] bnd = ("--" + boundary).getBytes(Charset.forName("UTF-8"));
+        byte[] nameMatch = ("name=\"" + fieldName + "\"").getBytes(Charset.forName("UTF-8"));
         byte[] crlfcrlf = {'\r','\n','\r','\n'};
         int pos = bodyOff;
         while (true) {
@@ -310,10 +342,10 @@ public class TelnetHttpServer {
             
             if (isField) {
                 int dataStart = pHeaderEnd + 4;
-                byte[] nextBnd = ("\r\n--" + boundary).getBytes(StandardCharsets.UTF_8);
+                byte[] nextBnd = ("\r\n--" + boundary).getBytes(Charset.forName("UTF-8"));
                 int dataEnd = indexOf(req, nextBnd, dataStart);
                 if (dataEnd < 0) {
-                    nextBnd = ("--" + boundary).getBytes(StandardCharsets.UTF_8);
+                    nextBnd = ("--" + boundary).getBytes(Charset.forName("UTF-8"));
                     dataEnd = indexOf(req, nextBnd, dataStart);
                 }
                 if (dataEnd < 0) dataEnd = req.length;
@@ -368,7 +400,7 @@ public class TelnetHttpServer {
                 }
                 
                 if (vlen > 0 && vlen < 128 && i + offset + vlen <= buf.length) {
-                    return new String(buf, i + offset, vlen, StandardCharsets.UTF_8).trim();
+                    return new String(buf, i + offset, vlen, Charset.forName("UTF-8")).trim();
                 }
                 return "";
             }
@@ -384,8 +416,9 @@ public class TelnetHttpServer {
 
         @Override
         public int compareTo(EditRule o) {
-            if (this.group != o.group) return Integer.compare(this.group, o.group);
-            return Integer.compare(this.elem, o.elem);
+            if (this.group != o.group) return (this.group < o.group ? -1 : 1);
+            if (this.elem != o.elem) return (this.elem < o.elem ? -1 : 1);
+            return 0;
         }
     }
 
@@ -396,13 +429,42 @@ public class TelnetHttpServer {
         if (group == 0x0010 && elem == 0x0040) return "CS";
         if (group == 0x0008 && elem == 0x0050) return "SH";
         if (group == 0x0008 && elem == 0x0020) return "DA";
+        if (group == 0x0008 && elem == 0x0030) return "TM";
         if (group == 0x0020 && elem == 0x000D) return "UI";
+        if (group == 0x0020 && elem == 0x000E) return "UI";
+        if (group == 0x0020 && elem == 0x0010) return "SH";
         return "LO";
     }
 
-    private void injectTagMem(ByteArrayOutputStream fout, EditRule rule, boolean isExplicit) throws IOException {
-        fout.write(rule.group & 0xFF); fout.write((rule.group >> 8) & 0xFF);
-        fout.write(rule.elem & 0xFF); fout.write((rule.elem >> 8) & 0xFF);
+    // Byte-stream helper functions for memory-safe I/O on Android 2.3
+    private int readUShort(InputStream in) throws IOException {
+        int ch1 = in.read();
+        int ch2 = in.read();
+        if (ch1 < 0 || ch2 < 0) return -1;
+        return (ch2 << 8) | ch1;
+    }
+
+    private long readUInt(InputStream in) throws IOException {
+        int b1 = in.read(), b2 = in.read(), b3 = in.read(), b4 = in.read();
+        if (b1 < 0 || b2 < 0 || b3 < 0 || b4 < 0) return -1;
+        return (((long)b4 << 24) | (b3 << 16) | (b2 << 8) | b1) & 0xFFFFFFFFL;
+    }
+
+    private void writeUShort(OutputStream out, int v) throws IOException {
+        out.write(v & 0xFF);
+        out.write((v >> 8) & 0xFF);
+    }
+
+    private void writeUInt(OutputStream out, long v) throws IOException {
+        out.write((int)(v & 0xFF));
+        out.write((int)((v >> 8) & 0xFF));
+        out.write((int)((v >> 16) & 0xFF));
+        out.write((int)((v >> 24) & 0xFF));
+    }
+
+    private void injectTagStream(OutputStream fout, EditRule rule, boolean isExplicit) throws IOException {
+        writeUShort(fout, rule.group);
+        writeUShort(fout, rule.elem);
         
         int newLen = rule.newVal.length;
         boolean needsPad = (newLen % 2 != 0);
@@ -411,26 +473,25 @@ public class TelnetHttpServer {
         String vr = getVrForTag(rule.group, rule.elem);
         
         if (isExplicit) {
-            fout.write(vr.getBytes(StandardCharsets.US_ASCII));
+            fout.write(vr.getBytes(Charset.forName("US-ASCII")));
             if (vr.equals("OB") || vr.equals("OW") || vr.equals("OF") || vr.equals("SQ") ||
                 vr.equals("UT") || vr.equals("UN") || vr.equals("UR") || vr.equals("UC")) {
-                fout.write(0); fout.write(0);
-                fout.write(newLen & 0xFF); fout.write((newLen >> 8) & 0xFF); 
-                fout.write((newLen >> 16) & 0xFF); fout.write((newLen >> 24) & 0xFF);
+                writeUShort(fout, 0);
+                writeUInt(fout, newLen);
             } else {
-                fout.write(newLen & 0xFF); fout.write((newLen >> 8) & 0xFF);
+                writeUShort(fout, newLen);
             }
         } else {
-            fout.write(newLen & 0xFF); fout.write((newLen >> 8) & 0xFF); 
-            fout.write((newLen >> 16) & 0xFF); fout.write((newLen >> 24) & 0xFF);
+            writeUInt(fout, newLen);
         }
         
         fout.write(rule.newVal);
         if (needsPad) fout.write(vr.equals("UI") ? 0x00 : 0x20);
     }
 
-    private byte[] applyDicomEdits(byte[] inputBytes, String rulesStr, String delim) {
-        List<EditRule> rules = new ArrayList<>();
+    // Direct Disk-to-Disk implementation specifically for Android 2.3 memory limitations
+    private boolean applyDicomEditsFile(File inFile, File outFile, String rulesStr, String delim) {
+        List<EditRule> rules = new ArrayList<EditRule>();
         String[] ruleTokens = rulesStr.split(java.util.regex.Pattern.quote(delim));
         
         for (String token : ruleTokens) {
@@ -455,7 +516,7 @@ public class TelnetHttpServer {
                     EditRule r = new EditRule();
                     r.group = group; 
                     r.elem = elem;
-                    r.newVal = valStr.getBytes(StandardCharsets.UTF_8);
+                    r.newVal = valStr.getBytes(Charset.forName("UTF-8"));
                     r.applied = false;
                     rules.add(r);
                 }
@@ -463,12 +524,22 @@ public class TelnetHttpServer {
         }
         java.util.Collections.sort(rules);
 
-        try (java.io.ByteArrayInputStream fin = new java.io.ByteArrayInputStream(inputBytes);
-             ByteArrayOutputStream fout = new ByteArrayOutputStream()) {
+        java.io.BufferedInputStream fin = null;
+        java.io.BufferedOutputStream fout = null;
+        try {
+            fin = new java.io.BufferedInputStream(new java.io.FileInputStream(inFile));
+            fout = new java.io.BufferedOutputStream(new java.io.FileOutputStream(outFile));
             
             byte[] header = new byte[132];
-            if (fin.read(header) != 132 || !new String(header, 128, 4, StandardCharsets.US_ASCII).equals("DICM")) {
-                return null; // Not a valid DICOM file
+            int readBytes = 0;
+            while (readBytes < 132) {
+                int r = fin.read(header, readBytes, 132 - readBytes);
+                if (r == -1) return false;
+                readBytes += r;
+            }
+
+            if (!new String(header, 128, 4, Charset.forName("US-ASCII")).equals("DICM")) {
+                return false; 
             }
             fout.write(header);
 
@@ -476,13 +547,11 @@ public class TelnetHttpServer {
             boolean isExplicit = true;
             boolean tsExplicit = true;
 
-            while (fin.available() > 0) {
-                int ch1 = fin.read(), ch2 = fin.read();
-                if (ch1 < 0 || ch2 < 0) break;
-                int group = (ch2 << 8) | ch1;
-                
-                ch1 = fin.read(); ch2 = fin.read();
-                int elem = (ch2 << 8) | ch1;
+            while (true) {
+                int group = readUShort(fin);
+                if (group == -1) break;
+                int elem = readUShort(fin);
+                if (elem == -1) break;
 
                 if (inMeta && group > 0x0002) {
                     inMeta = false;
@@ -494,7 +563,7 @@ public class TelnetHttpServer {
                 if (!isSqItem) {
                     for (EditRule r : rules) {
                         if (!r.applied && (r.group < group || (r.group == group && r.elem < elem))) {
-                            injectTagMem(fout, r, r.group <= 0x0002 ? tsExplicit : isExplicit);
+                            injectTagStream(fout, r, r.group <= 0x0002 ? tsExplicit : isExplicit);
                             r.applied = true;
                         }
                     }
@@ -506,23 +575,26 @@ public class TelnetHttpServer {
 
                 if (isExplicit && !isSqItem) {
                     byte[] vrBytes = new byte[2];
-                    fin.read(vrBytes);
-                    vrStr = new String(vrBytes, StandardCharsets.US_ASCII);
+                    if (fin.read(vrBytes) != 2) break;
+                    vrStr = new String(vrBytes, Charset.forName("US-ASCII"));
 
                     if (vrStr.equals("OB") || vrStr.equals("OW") || vrStr.equals("OF") || vrStr.equals("SQ") ||
                         vrStr.equals("UT") || vrStr.equals("UN") || vrStr.equals("UR") || vrStr.equals("UC")) {
                         fin.skip(2); // reserved
-                        int b1 = fin.read(), b2 = fin.read(), b3 = fin.read(), b4 = fin.read();
-                        length = (((long)b4 << 24) | (b3 << 16) | (b2 << 8) | b1) & 0xFFFFFFFFL;
+                        length = readUInt(fin);
                         is32bitLen = true;
                     } else {
-                        int b1 = fin.read(), b2 = fin.read();
-                        length = (b2 << 8) | b1;
+                        length = readUShort(fin);
                     }
                 } else {
-                    int b1 = fin.read(), b2 = fin.read(), b3 = fin.read(), b4 = fin.read();
-                    length = (((long)b4 << 24) | (b3 << 16) | (b2 << 8) | b1) & 0xFFFFFFFFL;
+                    length = readUInt(fin);
                     is32bitLen = true;
+                }
+
+                // Strip Group Length Tags to prevent viewer corruption if our tag-adding shifts lengths
+                if (group > 0x0002 && elem == 0x0000) {
+                    if (length > 0 && length != 0xFFFFFFFFL) fin.skip(length);
+                    continue;
                 }
 
                 EditRule matchedRule = null;
@@ -532,8 +604,8 @@ public class TelnetHttpServer {
                     }
                 }
 
-                fout.write(group & 0xFF); fout.write((group >> 8) & 0xFF);
-                fout.write(elem & 0xFF); fout.write((elem >> 8) & 0xFF);
+                writeUShort(fout, group);
+                writeUShort(fout, elem);
 
                 if (matchedRule != null && !isSqItem) {
                     matchedRule.applied = true;
@@ -542,17 +614,15 @@ public class TelnetHttpServer {
                     if (needsPad) newLen++;
 
                     if (isExplicit) {
-                        fout.write(vrStr.getBytes(StandardCharsets.US_ASCII));
+                        fout.write(vrStr.getBytes(Charset.forName("US-ASCII")));
                         if (is32bitLen) {
-                            fout.write(0); fout.write(0);
-                            fout.write(newLen & 0xFF); fout.write((newLen >> 8) & 0xFF); 
-                            fout.write((newLen >> 16) & 0xFF); fout.write((newLen >> 24) & 0xFF);
+                            writeUShort(fout, 0);
+                            writeUInt(fout, newLen);
                         } else {
-                            fout.write(newLen & 0xFF); fout.write((newLen >> 8) & 0xFF);
+                            writeUShort(fout, newLen);
                         }
                     } else {
-                        fout.write(newLen & 0xFF); fout.write((newLen >> 8) & 0xFF); 
-                        fout.write((newLen >> 16) & 0xFF); fout.write((newLen >> 24) & 0xFF);
+                        writeUInt(fout, newLen);
                     }
 
                     fout.write(matchedRule.newVal);
@@ -562,24 +632,22 @@ public class TelnetHttpServer {
 
                 } else {
                     if (isExplicit && !isSqItem) {
-                        fout.write(vrStr.getBytes(StandardCharsets.US_ASCII));
+                        fout.write(vrStr.getBytes(Charset.forName("US-ASCII")));
                         if (is32bitLen) {
-                            fout.write(0); fout.write(0);
-                            fout.write((int)(length & 0xFF)); fout.write((int)((length >> 8) & 0xFF)); 
-                            fout.write((int)((length >> 16) & 0xFF)); fout.write((int)((length >> 24) & 0xFF));
+                            writeUShort(fout, 0);
+                            writeUInt(fout, length);
                         } else {
-                            fout.write((int)(length & 0xFF)); fout.write((int)((length >> 8) & 0xFF));
+                            writeUShort(fout, (int)length);
                         }
                     } else {
-                        fout.write((int)(length & 0xFF)); fout.write((int)((length >> 8) & 0xFF)); 
-                        fout.write((int)((length >> 16) & 0xFF)); fout.write((int)((length >> 24) & 0xFF));
+                        writeUInt(fout, length);
                     }
 
                     if (group == 0x0002 && elem == 0x0010 && length > 0) {
                         byte[] tsBytes = new byte[(int) length];
-                        fin.read(tsBytes);
-                        fout.write(tsBytes);
-                        String ts = new String(tsBytes, StandardCharsets.US_ASCII);
+                        int r = fin.read(tsBytes);
+                        if (r > 0) fout.write(tsBytes, 0, r);
+                        String ts = new String(tsBytes, Charset.forName("US-ASCII"));
                         if (ts.startsWith("1.2.840.10008.1.2.1")) tsExplicit = true;
                         else if (ts.startsWith("1.2.840.10008.1.2")) tsExplicit = false;
                     } else if (length > 0 && length != 0xFFFFFFFFL) {
@@ -598,13 +666,16 @@ public class TelnetHttpServer {
 
             for (EditRule r : rules) {
                 if (!r.applied) {
-                    injectTagMem(fout, r, r.group <= 0x0002 ? tsExplicit : isExplicit);
+                    injectTagStream(fout, r, r.group <= 0x0002 ? tsExplicit : isExplicit);
                     r.applied = true;
                 }
             }
-            return fout.toByteArray();
+            return true;
         } catch (IOException e) {
-            return null;
+            return false;
+        } finally {
+            if (fin != null) try { fin.close(); } catch (Exception e) {}
+            if (fout != null) try { fout.close(); } catch (Exception e) {}
         }
     }
 
@@ -628,7 +699,7 @@ public class TelnetHttpServer {
                 if (headerEnd < 0) {
                     headerEnd = findHeaderEnd(current);
                     if (headerEnd >= 0) {
-                        String hdrStr = new String(current, 0, headerEnd, StandardCharsets.UTF_8);
+                        String hdrStr = new String(current, 0, headerEnd, Charset.forName("UTF-8"));
                         for (String hLine : hdrStr.split("\r\n")) {
                             if (hLine.toLowerCase().startsWith("content-length:")) {
                                 try {
@@ -646,8 +717,8 @@ public class TelnetHttpServer {
             if (headerEnd < 0) return;
 
             byte[] fullReqBytes = reqBuf.toByteArray();
-            String headerStr = new String(fullReqBytes, 0, headerEnd, StandardCharsets.UTF_8);
-            String bodyStr = new String(fullReqBytes, headerEnd + 4, fullReqBytes.length - (headerEnd + 4), StandardCharsets.UTF_8);
+            String headerStr = new String(fullReqBytes, 0, headerEnd, Charset.forName("UTF-8"));
+            String bodyStr = new String(fullReqBytes, headerEnd + 4, fullReqBytes.length - (headerEnd + 4), Charset.forName("UTF-8"));
 
             String boundary = null;
             for (String hLine : headerStr.split("\r\n")) {
@@ -691,7 +762,7 @@ public class TelnetHttpServer {
                                  "Location: /settings\r\n" +
                                  "Set-Cookie: risAuth=" + store.delPwd + "; Path=/; Max-Age=86400\r\n" +
                                  "Connection: close\r\n\r\n";
-                    out.write(hdr.getBytes(StandardCharsets.UTF_8));
+                    out.write(hdr.getBytes(Charset.forName("UTF-8")));
                     out.flush();
                 } else {
                     sendHttpResponse(out, "200 OK", "text/html; charset=utf-8",
@@ -743,13 +814,13 @@ public class TelnetHttpServer {
                 String sop = url.substring(14);
                 File f = store.getImageFilePath(sop);
                 if (f != null && f.exists()) {
-                    byte[] data = java.nio.file.Files.readAllBytes(f.toPath());
+                    byte[] data = readAllBytes(f);
                     String hdr = "HTTP/1.1 200 OK\r\n" +
                                  "Content-Type: application/dicom\r\n" +
                                  "Content-Disposition: attachment; filename=\"" + f.getName() + "\"\r\n" +
                                  "Content-Length: " + data.length + "\r\n" +
                                  "Connection: close\r\n\r\n";
-                    out.write(hdr.getBytes(StandardCharsets.UTF_8));
+                    out.write(hdr.getBytes(Charset.forName("UTF-8")));
                     out.write(data);
                     out.flush();
                 } else {
@@ -762,7 +833,7 @@ public class TelnetHttpServer {
                 String sop = url.substring(12);
                 File f = store.getImageFilePath(sop);
                 if (f != null && f.exists()) {
-                    byte[] data = java.nio.file.Files.readAllBytes(f.toPath());
+                    byte[] data = readAllBytes(f);
                     StringBuilder sb = new StringBuilder();
                     for (int i = 0; i < Math.min(data.length, 4096); i++) {
                         char c = (char) data[i];
@@ -790,13 +861,13 @@ public class TelnetHttpServer {
                 } else {
                      File f = new File(store.dataDir, fileReq);
                      if (f.exists()) {
-                         byte[] data = java.nio.file.Files.readAllBytes(f.toPath());
+                         byte[] data = readAllBytes(f);
                          String hdr = "HTTP/1.1 200 OK\r\n" +
                                       "Content-Type: text/csv\r\n" +
                                       "Content-Disposition: attachment; filename=\"" + f.getName() + "\"\r\n" +
                                       "Content-Length: " + data.length + "\r\n" +
                                       "Connection: close\r\n\r\n";
-                         out.write(hdr.getBytes(StandardCharsets.UTF_8));
+                         out.write(hdr.getBytes(Charset.forName("UTF-8")));
                          out.write(data);
                          out.flush();
                      } else {
@@ -822,7 +893,13 @@ public class TelnetHttpServer {
                         if (isNew) {
                             String tempSop = "1.2.276.0.7230010.3." + System.currentTimeMillis() + "." + (int)(Math.random()*1000);
                             File f = new File(store.dataDir, tempSop + ".dcm");
-                            try (java.io.FileOutputStream fos = new java.io.FileOutputStream(f)) { fos.write(fileData); }
+                            java.io.FileOutputStream fos = null;
+                            try {
+                                fos = new java.io.FileOutputStream(f);
+                                fos.write(fileData);
+                            } finally {
+                                if (fos != null) try { fos.close(); } catch (Exception e) {}
+                            }
                             
                             String askHtml = HTML_START + "<h2>File Uploaded Successfully</h2>" +
                                 "<div class='query-box'>" +
@@ -836,7 +913,13 @@ public class TelnetHttpServer {
                         } else {
                             File f = store.getImageFilePath(identifier);
                             if (f != null) {
-                                try (java.io.FileOutputStream fos = new java.io.FileOutputStream(f)) { fos.write(fileData); }
+                                java.io.FileOutputStream fos = null;
+                                try {
+                                    fos = new java.io.FileOutputStream(f);
+                                    fos.write(fileData);
+                                } finally {
+                                    if (fos != null) try { fos.close(); } catch (Exception e) {}
+                                }
                             }
                             String askHtml = HTML_START + "<h2>File Replaced Successfully</h2>" +
                                 "<div class='query-box'>" +
@@ -866,9 +949,14 @@ public class TelnetHttpServer {
                     File f = null;
                     if (newSop != null) {
                         f = new File(store.dataDir, newSop + ".dcm");
-                        try (java.io.FileWriter fw = new java.io.FileWriter(new File(store.dataDir, "c-store.csv"), true)) {
+                        java.io.FileWriter fw = null;
+                        try {
+                            fw = new java.io.FileWriter(new File(store.dataDir, "c-store.csv"), true);
                             fw.write("\r\n" + acc + "," + newSop + ",OT,");
-                        } catch (Exception ignored) {}
+                        } catch (Exception ignored) {
+                        } finally {
+                            if (fw != null) try { fw.close(); } catch (Exception e) {}
+                        }
                     } else if (sop != null) {
                         f = store.getImageFilePath(sop);
                         for (RisDataStore.StoredImageInfo info : store.getAllStoredImages()) {
@@ -880,7 +968,6 @@ public class TelnetHttpServer {
 
                     if (f != null && f.exists() && acc != null && !acc.isEmpty()) {
                         try {
-                            byte[] fileBytes = java.nio.file.Files.readAllBytes(f.toPath());
                             String pName = "", pId = "", dob = "";
                             for (String row : store.getCsvRowsSnapshot()) {
                                 String[] vals = RisDataStore.parseCsvLineToEntry(row);
@@ -897,11 +984,12 @@ public class TelnetHttpServer {
                                            "0x0010,0x0020=" + pId + "`" +
                                            "0x0010,0x0030=" + dob;
 
-                            byte[] patchedBytes = applyDicomEdits(fileBytes, rules, "`");
-                            if (patchedBytes != null) {
-                                try (java.io.FileOutputStream fos = new java.io.FileOutputStream(f)) {
-                                    fos.write(patchedBytes);
-                                }
+                            File tempOut = new File(f.getParent(), "temp_" + f.getName());
+                            if (applyDicomEditsFile(f, tempOut, rules, "`")) {
+                                f.delete();
+                                tempOut.renameTo(f);
+                            } else {
+                                tempOut.delete();
                             }
                         } catch (Exception ignored) {}
                     }
@@ -927,7 +1015,7 @@ public class TelnetHttpServer {
                                      "Location: /settings\r\n" +
                                      "Set-Cookie: risAuth=" + store.delPwd + "; Path=/; Max-Age=86400\r\n" +
                                      "Connection: close\r\n\r\n";
-                        out.write(hdr.getBytes(StandardCharsets.UTF_8));
+                        out.write(hdr.getBytes(Charset.forName("UTF-8")));
                         out.flush();
                     } else {
                         sendHttpResponse(out, "200 OK", "text/html; charset=utf-8", HTML_START + "<meta http-equiv='refresh' content='2; url=/settings' /><h2>Password cannot be empty</h2>" + HTML_END);
@@ -987,8 +1075,12 @@ public class TelnetHttpServer {
                             }
                         } else {
                             File outF = new File(store.dataDir, csvType);
-                            try (java.io.FileWriter fw = new java.io.FileWriter(outF)) {
+                            java.io.FileWriter fw = null;
+                            try {
+                                fw = new java.io.FileWriter(outF);
                                 fw.write(fileData.trim());
+                            } finally {
+                                if (fw != null) try { fw.close(); } catch (Exception e) {}
                             }
                             if (csvType.equals("pcodes.csv")) store.loadProcedureCodes();
                         }
@@ -1114,8 +1206,11 @@ public class TelnetHttpServer {
             } else {
                 String acc = entry[8];
                 List<RisDataStore.StoredImageInfo> images = store.getStoredImagesForAccession(acc);
+                
+                sb.append("<td style='white-space:nowrap;'>");
+                
+                // Show existing images if any
                 if (!images.isEmpty()) {
-                    sb.append("<td style='white-space:nowrap;'>");
                     for (int imgIdx = 0; imgIdx < images.size(); imgIdx++) {
                         RisDataStore.StoredImageInfo img = images.get(imgIdx);
                         sb.append("<div style='margin-bottom:4px; font-size:12px; display:flex; align-items:center; gap:5px;'>")
@@ -1126,12 +1221,14 @@ public class TelnetHttpServer {
                           .append("<label style='cursor:pointer; color:#f44336; font-weight:bold; text-decoration:underline;'>Replace<input type='file' name='file' accept='.dcm' style='display:none;' onchange='this.form.submit()'></label>")
                           .append("</form></div>");
                     }
-                    sb.append("</td>");
                 } else {
-                    sb.append("<td>0 - <form method='POST' action='/upload_new?acc=").append(acc).append("' enctype='multipart/form-data' style='margin:0; padding:0; display:inline-block; margin-left:8px;'>")
-                      .append("<label style='cursor:pointer; color:#2196F3; font-weight:bold; text-decoration:underline;'>Upload<input type='file' name='file' accept='.dcm' style='display:none;' onchange='this.form.submit()'></label>")
-                      .append("</form></td>");
+                    sb.append("<span style='margin-right:8px; font-size:14px;'>0 Images - </span> ");
                 }
+                
+                // Unconditionally append the Upload New button for this accession
+                sb.append("<form method='POST' action='/upload_new?acc=").append(acc).append("' enctype='multipart/form-data' style='margin:0; padding:0; display:inline-block; margin-top:2px;'>")
+                  .append("<label style='cursor:pointer; color:#4CAF50; font-weight:bold; text-decoration:underline;'>+ Upload Image<input type='file' name='file' accept='.dcm' style='display:none;' onchange='this.form.submit()'></label>")
+                  .append("</form></td>");
             }
             
             sb.append("</tr>");
@@ -1169,8 +1266,10 @@ public class TelnetHttpServer {
         sb.append("<datalist id='stNameList'>");
         sb.append("<datalist id='modList'>");
         if (roomsFile.exists()) {
-            List<String[]> rList = new ArrayList<>();
-            try (BufferedReader br = new BufferedReader(new FileReader(roomsFile))) {
+            List<String[]> rList = new ArrayList<String[]>();
+            BufferedReader br = null;
+            try {
+                br = new BufferedReader(new FileReader(roomsFile));
                 String line;
                 boolean isHeader = true;
                 while ((line = br.readLine()) != null && rList.size() < 64) {
@@ -1183,12 +1282,15 @@ public class TelnetHttpServer {
                     }
                     rList.add(item);
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception ignored) {
+            } finally {
+                if (br != null) try { br.close(); } catch (Exception e) {}
+            }
 
             sb.append("<script>var rData = [");
-            Set<String> roomSet = new HashSet<>();
-            Set<String> stnSet = new HashSet<>();
-            Set<String> modSet = new HashSet<>();
+            Set<String> roomSet = new HashSet<String>();
+            Set<String> stnSet = new HashSet<String>();
+            Set<String> modSet = new HashSet<String>();
             
             for (String[] r : rList) {
                 if (!r[5].isEmpty()) roomSet.add(r[5]);
@@ -1241,12 +1343,12 @@ public class TelnetHttpServer {
     }
 
     private void sendHttpResponse(OutputStream out, String status, String contentType, String body) throws IOException {
-        byte[] bodyBytes = body.getBytes(StandardCharsets.UTF_8);
+        byte[] bodyBytes = body.getBytes(Charset.forName("UTF-8"));
         String hdr = "HTTP/1.1 " + status + "\r\n" +
                      "Content-Type: " + contentType + "\r\n" +
                      "Content-Length: " + bodyBytes.length + "\r\n" +
                      "Connection: close\r\n\r\n";
-        out.write(hdr.getBytes(StandardCharsets.UTF_8));
+        out.write(hdr.getBytes(Charset.forName("UTF-8")));
         out.write(bodyBytes);
         out.flush();
     }
