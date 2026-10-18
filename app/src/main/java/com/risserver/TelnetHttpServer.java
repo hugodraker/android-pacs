@@ -31,8 +31,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
-public class TelnetHttpServer {
-    private final RisDataStore store;
+public class TelnetHttpServer {private final RisDataStore store;
     private ServerSocket telnetServerSocket;
     private ServerSocket httpServerSocket;
     private volatile boolean running = false;
@@ -891,8 +890,14 @@ public class TelnetHttpServer {
                     byte[] fileData = extractMultipartBinaryFile(fullReqBytes, headerEnd + 4, boundary, "file");
                     if (fileData != null && fileData.length > 0) {
                         if (isNew) {
-                            String tempSop = "1.2.276.0.7230010.3." + System.currentTimeMillis() + "." + (int)(Math.random()*1000);
-                            File f = new File(store.dataDir, tempSop + ".dcm");
+                            long fileNum = 1;
+                            File f;
+                            String tempSop;
+                            do {
+                                tempSop = String.format("IMG%05d", fileNum++);
+                                f = new File(store.dataDir, tempSop + ".dcm");
+                            } while (f.exists());
+                            
                             java.io.FileOutputStream fos = null;
                             try {
                                 fos = new java.io.FileOutputStream(f);
@@ -1120,7 +1125,8 @@ public class TelnetHttpServer {
         }
     }
 
-    private String escapeJs(String str) {
+    
+private String escapeJs(String str) {
         if (str == null) return "";
         return str.replace("\\", "\\\\").replace("'", "\\'").replace("\"", "\\\"");
     }
@@ -1209,7 +1215,6 @@ public class TelnetHttpServer {
                 
                 sb.append("<td style='white-space:nowrap;'>");
                 
-                // Show existing images if any
                 if (!images.isEmpty()) {
                     for (int imgIdx = 0; imgIdx < images.size(); imgIdx++) {
                         RisDataStore.StoredImageInfo img = images.get(imgIdx);
@@ -1218,17 +1223,17 @@ public class TelnetHttpServer {
                           .append("<a href='/download?sop=").append(img.sopInstanceUID).append("' style='color:#2196F3;text-decoration:none;font-weight:bold;'>DL .dcm</a> | ")
                           .append("<a href='/header?sop=").append(img.sopInstanceUID).append("' style='color:#9c27b0;text-decoration:none;font-weight:bold;'>Header</a> | ")
                           .append("<form method='POST' action='/replace?sop=").append(img.sopInstanceUID).append("' enctype='multipart/form-data' style='margin:0; padding:0; display:inline-block;'>")
-                          .append("<label style='cursor:pointer; color:#f44336; font-weight:bold; text-decoration:underline;'>Replace<input type='file' name='file' accept='.dcm' style='display:none;' onchange='this.form.submit()'></label>")
+                          .append("<label style='cursor:pointer; color:#f44336; font-weight:bold; text-decoration:none;'>Replace<input type='file' name='file' accept='.dcm' style='display:none;' onchange='this.form.submit()'></label>")
                           .append("</form></div>");
                     }
                 } else {
-                    sb.append("<span style='margin-right:8px; font-size:14px;'>0 Images - </span> ");
+                    sb.append("<div style='margin-bottom:4px; font-size:12px;'>0 Images</div>");
                 }
                 
-                // Unconditionally append the Upload New button for this accession
-                sb.append("<form method='POST' action='/upload_new?acc=").append(acc).append("' enctype='multipart/form-data' style='margin:0; padding:0; display:inline-block; margin-top:2px;'>")
-                  .append("<label style='cursor:pointer; color:#4CAF50; font-weight:bold; text-decoration:underline;'>+ Upload Image<input type='file' name='file' accept='.dcm' style='display:none;' onchange='this.form.submit()'></label>")
-                  .append("</form></td>");
+                sb.append("<div style='font-size:12px;'>")
+                  .append("<form method='POST' action='/upload_new?acc=").append(acc).append("' enctype='multipart/form-data' style='margin:0; padding:0; display:inline-block;'>")
+                  .append("<label style='cursor:pointer; color:#4CAF50; font-weight:bold; text-decoration:none;'>Upload<input type='file' name='file' accept='.dcm' style='display:none;' onchange='this.form.submit()'></label>")
+                  .append("</form></div></td>");
             }
             
             sb.append("</tr>");
@@ -1341,8 +1346,7 @@ public class TelnetHttpServer {
         sb.append(HTML_END);
         return sb.toString();
     }
-
-    private void sendHttpResponse(OutputStream out, String status, String contentType, String body) throws IOException {
+private void sendHttpResponse(OutputStream out, String status, String contentType, String body) throws IOException {
         byte[] bodyBytes = body.getBytes(Charset.forName("UTF-8"));
         String hdr = "HTTP/1.1 " + status + "\r\n" +
                      "Content-Type: " + contentType + "\r\n" +
