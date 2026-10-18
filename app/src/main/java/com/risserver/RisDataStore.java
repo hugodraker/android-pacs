@@ -631,7 +631,7 @@ public class RisDataStore {
         }
         File dir = new File(getStorageRoot(), storageFolder);
         if (!dir.exists()) dir.mkdirs();
-        File f = new File(dir, String.format(Locale.US, "I%07d", storageIndex));
+        File f = new File(dir, String.format(Locale.US, "I%07d.dcm", storageIndex));
         storageIndex++;
         saveConfig();
         return f;

@@ -890,13 +890,8 @@ public class TelnetHttpServer {private final RisDataStore store;
                     byte[] fileData = extractMultipartBinaryFile(fullReqBytes, headerEnd + 4, boundary, "file");
                     if (fileData != null && fileData.length > 0) {
                         if (isNew) {
-                            long fileNum = 1;
-                            File f;
-                            String tempSop;
-                            do {
-                                tempSop = String.format("IMG%05d", fileNum++);
-                                f = new File(store.dataDir, tempSop + ".dcm");
-                            } while (f.exists());
+                            File f = store.allocateImageFile();
+                            String tempSop = f.getName().replace(".dcm", "");
                             
                             java.io.FileOutputStream fos = null;
                             try {
@@ -953,7 +948,7 @@ public class TelnetHttpServer {private final RisDataStore store;
 
                     File f = null;
                     if (newSop != null) {
-                        f = new File(store.dataDir, newSop + ".dcm");
+                        f = new File(new File(store.getStorageRoot(), store.storageFolder), newSop + ".dcm");
                         java.io.FileWriter fw = null;
                         try {
                             fw = new java.io.FileWriter(new File(store.dataDir, "c-store.csv"), true);
