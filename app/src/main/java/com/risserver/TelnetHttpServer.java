@@ -408,6 +408,245 @@ public class TelnetHttpServer {
         return "";
     }
 
+    private static class EditRule implements Comparable<EditRule> {
+        int group;
+        int elem;
+        byte[] newVal;
+        boolean applied;
+
+        @Override
+        public int compareTo(EditRule o) {
+            if (this.group != o.group) return (this.group < o.group ? -1 : 1);
+            if (this.elem != o.elem) return (this.elem < o.elem ? -1 : 1);
+            return 0;
+        }
+    }
+
+    private String getVrForTag(int group, int elem) {
+        if (group == 0x0010 && elem == 0x0010) return "PN";
+        if (group == 0x0010 && elem == 0x0020) return "LO";
+        if (group == 0x0010 && elem == 0x0030) return "DA";
+        if (group == 0x0010 && elem == 0x0040) return "CS";
+        if (group == 0x0008 && elem == 0x0050) return "SH";
+        if (group == 0x0008 && elem == 0x0020) return "DA";
+        if (group == 0x0020 && elem == 0x000D) return "UI";
+        return "LO";
+    }
+
+    private void injectTagMem(ByteArrayOutputStream fout, EditRule rule, boolean isExplicit) throws IOException {
+        fout.write(rule.group & 0xFF); fout.write((rule.group >> 8) & 0xFF);
+        fout.write(rule.elem & 0xFF); fout.write((rule.elem >> 8) & 0xFF);
+        
+        int newLen = rule.newVal.length;
+        boolean needsPad = (newLen % 2 != 0);
+        if (needsPad) newLen++;
+        
+        String vr = getVrForTag(rule.group, rule.elem);
+        
+        if (isExplicit) {
+            fout.write(vr.getBytes(Charset.forName("US-ASCII")));
+            if (vr.equals("OB") || vr.equals("OW") || vr.equals("OF") || vr.equals("SQ") ||
+                vr.equals("UT") || vr.equals("UN") || vr.equals("UR") || vr.equals("UC")) {
+                fout.write(0); fout.write(0);
+                fout.write(newLen & 0xFF); fout.write((newLen >> 8) & 0xFF); 
+                fout.write((newLen >> 16) & 0xFF); fout.write((newLen >> 24) & 0xFF);
+            } else {
+                fout.write(newLen & 0xFF); fout.write((newLen >> 8) & 0xFF);
+            }
+        } else {
+            fout.write(newLen & 0xFF); fout.write((newLen >> 8) & 0xFF); 
+            fout.write((newLen >> 16) & 0xFF); fout.write((newLen >> 24) & 0xFF);
+        }
+        
+        fout.write(rule.newVal);
+        if (needsPad) fout.write(vr.equals("UI") ? 0x00 : 0x20);
+    }
+
+    private byte[] applyDicomEdits(byte[] inputBytes, String rulesStr, String delim) {
+        List<EditRule> rules = new ArrayList<EditRule>();
+        String[] ruleTokens = rulesStr.split(java.util.regex.Pattern.quote(delim));
+        
+        for (String token : ruleTokens) {
+            int eqIdx = token.indexOf('=');
+            if (eqIdx != -1) {
+                String tagStr = token.substring(0, eqIdx).replaceAll("\\s+", "");
+                String valStr = token.substring(eqIdx + 1);
+                int group = -1, elem = -1;
+                
+                try {
+                    if (tagStr.contains(",")) {
+                        String[] parts = tagStr.replace("0x", "").replace("(", "").replace(")", "").split(",");
+                        group = Integer.parseInt(parts[0], 16);
+                        elem = Integer.parseInt(parts[1], 16);
+                    } else if (tagStr.length() == 8) {
+                        group = Integer.parseInt(tagStr.substring(0, 4), 16);
+                        elem = Integer.parseInt(tagStr.substring(4, 8), 16);
+                    }
+                } catch (Exception ignored) {}
+                
+                if (group != -1) {
+                    EditRule r = new EditRule();
+                    r.group = group; 
+                    r.elem = elem;
+                    r.newVal = valStr.getBytes(Charset.forName("UTF-8"));
+                    r.applied = false;
+                    rules.add(r);
+                }
+            }
+        }
+        java.util.Collections.sort(rules);
+
+        java.io.ByteArrayInputStream fin = null;
+        ByteArrayOutputStream fout = null;
+        try {
+            fin = new java.io.ByteArrayInputStream(inputBytes);
+            fout = new ByteArrayOutputStream();
+            
+            byte[] header = new byte[132];
+            if (fin.read(header) != 132 || !new String(header, 128, 4, Charset.forName("US-ASCII")).equals("DICM")) {
+                return null; // Not a valid DICOM file
+            }
+            fout.write(header);
+
+            boolean inMeta = true;
+            boolean isExplicit = true;
+            boolean tsExplicit = true;
+
+            while (fin.available() > 0) {
+                int ch1 = fin.read(), ch2 = fin.read();
+                if (ch1 < 0 || ch2 < 0) break;
+                int group = (ch2 << 8) | ch1;
+                
+                ch1 = fin.read(); ch2 = fin.read();
+                int elem = (ch2 << 8) | ch1;
+
+                if (inMeta && group > 0x0002) {
+                    inMeta = false;
+                    isExplicit = tsExplicit;
+                }
+
+                boolean isSqItem = (group == 0xFFFE);
+
+                if (!isSqItem) {
+                    for (EditRule r : rules) {
+                        if (!r.applied && (r.group < group || (r.group == group && r.elem < elem))) {
+                            injectTagMem(fout, r, r.group <= 0x0002 ? tsExplicit : isExplicit);
+                            r.applied = true;
+                        }
+                    }
+                }
+
+                String vrStr = "";
+                long length = 0;
+                boolean is32bitLen = false;
+
+                if (isExplicit && !isSqItem) {
+                    byte[] vrBytes = new byte[2];
+                    fin.read(vrBytes);
+                    vrStr = new String(vrBytes, Charset.forName("US-ASCII"));
+
+                    if (vrStr.equals("OB") || vrStr.equals("OW") || vrStr.equals("OF") || vrStr.equals("SQ") ||
+                        vrStr.equals("UT") || vrStr.equals("UN") || vrStr.equals("UR") || vrStr.equals("UC")) {
+                        fin.skip(2); // reserved
+                        int b1 = fin.read(), b2 = fin.read(), b3 = fin.read(), b4 = fin.read();
+                        length = (((long)b4 << 24) | (b3 << 16) | (b2 << 8) | b1) & 0xFFFFFFFFL;
+                        is32bitLen = true;
+                    } else {
+                        int b1 = fin.read(), b2 = fin.read();
+                        length = (b2 << 8) | b1;
+                    }
+                } else {
+                    int b1 = fin.read(), b2 = fin.read(), b3 = fin.read(), b4 = fin.read();
+                    length = (((long)b4 << 24) | (b3 << 16) | (b2 << 8) | b1) & 0xFFFFFFFFL;
+                    is32bitLen = true;
+                }
+
+                EditRule matchedRule = null;
+                for (EditRule r : rules) {
+                    if (r.group == group && r.elem == elem) {
+                        matchedRule = r; break;
+                    }
+                }
+
+                fout.write(group & 0xFF); fout.write((group >> 8) & 0xFF);
+                fout.write(elem & 0xFF); fout.write((elem >> 8) & 0xFF);
+
+                if (matchedRule != null && !isSqItem) {
+                    matchedRule.applied = true;
+                    int newLen = matchedRule.newVal.length;
+                    boolean needsPad = (newLen % 2 != 0);
+                    if (needsPad) newLen++;
+
+                    if (isExplicit) {
+                        fout.write(vrStr.getBytes(Charset.forName("US-ASCII")));
+                        if (is32bitLen) {
+                            fout.write(0); fout.write(0);
+                            fout.write(newLen & 0xFF); fout.write((newLen >> 8) & 0xFF); 
+                            fout.write((newLen >> 16) & 0xFF); fout.write((newLen >> 24) & 0xFF);
+                        } else {
+                            fout.write(newLen & 0xFF); fout.write((newLen >> 8) & 0xFF);
+                        }
+                    } else {
+                        fout.write(newLen & 0xFF); fout.write((newLen >> 8) & 0xFF); 
+                        fout.write((newLen >> 16) & 0xFF); fout.write((newLen >> 24) & 0xFF);
+                    }
+
+                    fout.write(matchedRule.newVal);
+                    if (needsPad) fout.write(vrStr.equals("UI") ? 0x00 : 0x20);
+
+                    if (length > 0 && length != 0xFFFFFFFFL) fin.skip(length);
+
+                } else {
+                    if (isExplicit && !isSqItem) {
+                        fout.write(vrStr.getBytes(Charset.forName("US-ASCII")));
+                        if (is32bitLen) {
+                            fout.write(0); fout.write(0);
+                            fout.write((int)(length & 0xFF)); fout.write((int)((length >> 8) & 0xFF)); 
+                            fout.write((int)((length >> 16) & 0xFF)); fout.write((int)((length >> 24) & 0xFF));
+                        } else {
+                            fout.write((int)(length & 0xFF)); fout.write((int)((length >> 8) & 0xFF));
+                        }
+                    } else {
+                        fout.write((int)(length & 0xFF)); fout.write((int)((length >> 8) & 0xFF)); 
+                        fout.write((int)((length >> 16) & 0xFF)); fout.write((int)((length >> 24) & 0xFF));
+                    }
+
+                    if (group == 0x0002 && elem == 0x0010 && length > 0) {
+                        byte[] tsBytes = new byte[(int) length];
+                        fin.read(tsBytes);
+                        fout.write(tsBytes);
+                        String ts = new String(tsBytes, Charset.forName("US-ASCII"));
+                        if (ts.startsWith("1.2.840.10008.1.2.1")) tsExplicit = true;
+                        else if (ts.startsWith("1.2.840.10008.1.2")) tsExplicit = false;
+                    } else if (length > 0 && length != 0xFFFFFFFFL) {
+                        byte[] buffer = new byte[8192];
+                        long remaining = length;
+                        while (remaining > 0) {
+                            int toRead = (int) Math.min(buffer.length, remaining);
+                            int bytesRead = fin.read(buffer, 0, toRead);
+                            if (bytesRead == -1) break;
+                            fout.write(buffer, 0, bytesRead);
+                            remaining -= bytesRead;
+                        }
+                    }
+                }
+            }
+
+            for (EditRule r : rules) {
+                if (!r.applied) {
+                    injectTagMem(fout, r, r.group <= 0x0002 ? tsExplicit : isExplicit);
+                    r.applied = true;
+                }
+            }
+            return fout.toByteArray();
+        } catch (IOException e) {
+            return null;
+        } finally {
+            if (fin != null) try { fin.close(); } catch (Exception e) {}
+            if (fout != null) try { fout.close(); } catch (Exception e) {}
+        }
+    }
+
     private void handleHttpClient(Socket client) {
         try {
             client.setSoTimeout(10000);
@@ -546,7 +785,7 @@ public class TelnetHttpServer {
                     byte[] data = readAllBytes(f);
                     String hdr = "HTTP/1.1 200 OK\r\n" +
                                  "Content-Type: application/dicom\r\n" +
-                                 "Content-Disposition: attachment; filename=\"" + f.getName() + ".dcm\"\r\n" +
+                                 "Content-Disposition: attachment; filename=\"" + f.getName() + "\"\r\n" +
                                  "Content-Length: " + data.length + "\r\n" +
                                  "Connection: close\r\n\r\n";
                     out.write(hdr.getBytes(Charset.forName("UTF-8")));
@@ -612,12 +851,16 @@ public class TelnetHttpServer {
             }
 
             if (method.equals("POST")) {
-                if (url.startsWith("/replace?sop=")) {
-                    String sop = url.substring(13);
-                    File f = store.getImageFilePath(sop);
-                    if (f != null && f.exists()) {
-                        byte[] fileData = extractMultipartBinaryFile(fullReqBytes, headerEnd + 4, boundary, "file");
-                        if (fileData != null && fileData.length > 0) {
+                
+                if (url.startsWith("/replace?sop=") || url.startsWith("/upload_new?acc=")) {
+                    boolean isNew = url.startsWith("/upload_new?acc=");
+                    String identifier = isNew ? url.substring(16) : url.substring(13); 
+                    
+                    byte[] fileData = extractMultipartBinaryFile(fullReqBytes, headerEnd + 4, boundary, "file");
+                    if (fileData != null && fileData.length > 0) {
+                        if (isNew) {
+                            String tempSop = "1.2.276.0.7230010.3." + System.currentTimeMillis() + "." + (int)(Math.random()*1000);
+                            File f = new File(store.dataDir, tempSop + ".dcm");
                             java.io.FileOutputStream fos = null;
                             try {
                                 fos = new java.io.FileOutputStream(f);
@@ -625,66 +868,104 @@ public class TelnetHttpServer {
                             } finally {
                                 if (fos != null) try { fos.close(); } catch (Exception e) {}
                             }
-                            String acc = extractAccession(fileData);
-                            if (acc.isEmpty()) {
-                                String askHtml = HTML_START + "<h2>File Replaced Successfully</h2>" +
-                                    "<div class='query-box'>" +
-                                    "<p>The uploaded DICOM file is missing an Accession Number.</p>" +
-                                    "<p>Would you like to write the Worklist patient data (Accession, Name, DOB, Patient ID) into this file?</p>" +
-                                    "<form method='POST' action='/patch?sop=" + sop + "'>" +
-                                    "<button type='submit' class='top-btn bg-green'>Yes, Write Data</button> " +
-                                    "<a href='/' class='top-btn bg-blue' style='text-decoration:none;'>No, Keep as is</a>" +
-                                    "</form></div>" + HTML_END;
-                                sendHttpResponse(out, "200 OK", "text/html; charset=utf-8", askHtml);
-                                return;
+                            
+                            String askHtml = HTML_START + "<h2>File Uploaded Successfully</h2>" +
+                                "<div class='query-box'>" +
+                                "<p>Would you like to write the Worklist patient data (Accession, Name, DOB, Patient ID) into this file's header, erasing existing values?</p>" +
+                                "<form method='POST' action='/patch?newSop=" + tempSop + "&acc=" + identifier + "'>" +
+                                "<button type='submit' class='top-btn bg-green'>Yes, Write Data</button> " +
+                                "<a href='/' class='top-btn bg-blue' style='text-decoration:none;'>No, Keep as is</a>" +
+                                "</form></div>" + HTML_END;
+                            sendHttpResponse(out, "200 OK", "text/html; charset=utf-8", askHtml);
+                            return;
+                        } else {
+                            File f = store.getImageFilePath(identifier);
+                            if (f != null) {
+                                java.io.FileOutputStream fos = null;
+                                try {
+                                    fos = new java.io.FileOutputStream(f);
+                                    fos.write(fileData);
+                                } finally {
+                                    if (fos != null) try { fos.close(); } catch (Exception e) {}
+                                }
                             }
+                            String askHtml = HTML_START + "<h2>File Replaced Successfully</h2>" +
+                                "<div class='query-box'>" +
+                                "<p>Would you like to write the Worklist patient data (Accession, Name, DOB, Patient ID) into this file's header, erasing existing values?</p>" +
+                                "<form method='POST' action='/patch?sop=" + identifier + "'>" +
+                                "<button type='submit' class='top-btn bg-green'>Yes, Write Data</button> " +
+                                "<a href='/' class='top-btn bg-blue' style='text-decoration:none;'>No, Keep as is</a>" +
+                                "</form></div>" + HTML_END;
+                            sendHttpResponse(out, "200 OK", "text/html; charset=utf-8", askHtml);
+                            return;
                         }
                     }
-                    sendHttpResponse(out, "200 OK", "text/html; charset=utf-8", HTML_START + "<meta http-equiv='refresh' content='0; url=/' /><h2>Replaced</h2>" + HTML_END);
+                    sendHttpResponse(out, "200 OK", "text/html; charset=utf-8", HTML_START + "<meta http-equiv='refresh' content='0; url=/' /><h2>Failed</h2>" + HTML_END);
                     return;
                 }
 
-                if (url.startsWith("/patch?sop=")) {
-                    String sop = url.substring(11);
-                    File f = store.getImageFilePath(sop);
-                    if (f != null && f.exists()) {
+                if (url.startsWith("/patch?")) {
+                    String sop = null;
+                    String acc = null;
+                    String newSop = null;
+                    for (String kv : url.substring(7).split("&")) {
+                        if (kv.startsWith("sop=")) sop = kv.substring(4);
+                        if (kv.startsWith("acc=")) acc = kv.substring(4);
+                        if (kv.startsWith("newSop=")) newSop = kv.substring(7);
+                    }
+
+                    File f = null;
+                    if (newSop != null) {
+                        f = new File(store.dataDir, newSop + ".dcm");
+                        java.io.FileWriter fw = null;
+                        try {
+                            fw = new java.io.FileWriter(new File(store.dataDir, "c-store.csv"), true);
+                            fw.write("\r\n" + acc + "," + newSop + ",OT,");
+                        } catch (Exception ignored) {
+                        } finally {
+                            if (fw != null) try { fw.close(); } catch (Exception e) {}
+                        }
+                    } else if (sop != null) {
+                        f = store.getImageFilePath(sop);
+                        for (RisDataStore.StoredImageInfo info : store.getAllStoredImages()) {
+                            if (info.sopInstanceUID.equals(sop)) {
+                                acc = info.accession; break;
+                            }
+                        }
+                    }
+
+                    if (f != null && f.exists() && acc != null && !acc.isEmpty()) {
                         try {
                             byte[] fileBytes = readAllBytes(f);
-                            String acc = "", pName = "", pId = "", dob = "";
-                            for (RisDataStore.StoredImageInfo info : store.getAllStoredImages()) {
-                                if (info.sopInstanceUID.equals(sop)) {
-                                    acc = info.accession;
+                            String pName = "", pId = "", dob = "";
+                            for (String row : store.getCsvRowsSnapshot()) {
+                                String[] vals = RisDataStore.parseCsvLineToEntry(row);
+                                if (vals.length > 8 && vals[8].equals(acc)) {
+                                    pName = vals[0];
+                                    pId = vals[1];
+                                    dob = vals[2];
                                     break;
                                 }
                             }
-                            if (!acc.isEmpty()) {
-                                for (String row : store.getCsvRowsSnapshot()) {
-                                    String[] vals = RisDataStore.parseCsvLineToEntry(row);
-                                    if (vals.length > 8 && vals[8].equals(acc)) {
-                                        pName = vals[0];
-                                        pId = vals[1];
-                                        dob = vals[2];
-                                        break;
-                                    }
-                                }
-                                boolean changed = false;
-                                changed |= DicomScpServer.patchTagInPlace(fileBytes, 0x0010, 0x0010, pName);
-                                changed |= DicomScpServer.patchTagInPlace(fileBytes, 0x0010, 0x0020, pId);
-                                changed |= DicomScpServer.patchTagInPlace(fileBytes, 0x0010, 0x0030, dob);
-                                changed |= DicomScpServer.patchTagInPlace(fileBytes, 0x0008, 0x0050, acc);
-                                if (changed) {
-                                    java.io.FileOutputStream fos = null;
-                                    try {
-                                        fos = new java.io.FileOutputStream(f);
-                                        fos.write(fileBytes);
-                                    } finally {
-                                        if (fos != null) try { fos.close(); } catch (Exception e) {}
-                                    }
+                            
+                            String rules = "0x0008,0x0050=" + acc + "`" +
+                                           "0x0010,0x0010=" + pName + "`" +
+                                           "0x0010,0x0020=" + pId + "`" +
+                                           "0x0010,0x0030=" + dob;
+
+                            byte[] patchedBytes = applyDicomEdits(fileBytes, rules, "`");
+                            if (patchedBytes != null) {
+                                java.io.FileOutputStream fos = null;
+                                try {
+                                    fos = new java.io.FileOutputStream(f);
+                                    fos.write(patchedBytes);
+                                } finally {
+                                    if (fos != null) try { fos.close(); } catch (Exception e) {}
                                 }
                             }
-                        } catch (Exception e) {}
+                        } catch (Exception ignored) {}
                     }
-                    sendHttpResponse(out, "200 OK", "text/html; charset=utf-8", HTML_START + "<meta http-equiv='refresh' content='0; url=/' /><h2>Patched</h2>" + HTML_END);
+                    sendHttpResponse(out, "200 OK", "text/html; charset=utf-8", HTML_START + "<meta http-equiv='refresh' content='0; url=/' /><h2>Patched Successfully</h2>" + HTML_END);
                     return;
                 }
 
@@ -766,11 +1047,12 @@ public class TelnetHttpServer {
                             }
                         } else {
                             File outF = new File(store.dataDir, csvType);
-                            java.io.FileWriter fw = new java.io.FileWriter(outF);
+                            java.io.FileWriter fw = null;
                             try {
+                                fw = new java.io.FileWriter(outF);
                                 fw.write(fileData.trim());
                             } finally {
-                                fw.close();
+                                if (fw != null) try { fw.close(); } catch (Exception e) {}
                             }
                             if (csvType.equals("pcodes.csv")) store.loadProcedureCodes();
                         }
@@ -910,7 +1192,9 @@ public class TelnetHttpServer {
                     }
                     sb.append("</td>");
                 } else {
-                    sb.append("<td>0</td>");
+                    sb.append("<td>0 - <form method='POST' action='/upload_new?acc=").append(acc).append("' enctype='multipart/form-data' style='margin:0; padding:0; display:inline-block; margin-left:8px;'>")
+                      .append("<label style='cursor:pointer; color:#2196F3; font-weight:bold; text-decoration:underline;'>Upload<input type='file' name='file' accept='.dcm' style='display:none;' onchange='this.form.submit()'></label>")
+                      .append("</form></td>");
                 }
             }
             
@@ -949,7 +1233,7 @@ public class TelnetHttpServer {
         sb.append("<datalist id='stNameList'>");
         sb.append("<datalist id='modList'>");
         if (roomsFile.exists()) {
-            List<String[]> rList = new ArrayList<>();
+            List<String[]> rList = new ArrayList<String[]>();
             BufferedReader br = null;
             try {
                 br = new BufferedReader(new FileReader(roomsFile));
@@ -971,9 +1255,9 @@ public class TelnetHttpServer {
             }
 
             sb.append("<script>var rData = [");
-            Set<String> roomSet = new HashSet<>();
-            Set<String> stnSet = new HashSet<>();
-            Set<String> modSet = new HashSet<>();
+            Set<String> roomSet = new HashSet<String>();
+            Set<String> stnSet = new HashSet<String>();
+            Set<String> modSet = new HashSet<String>();
             
             for (String[] r : rList) {
                 if (!r[5].isEmpty()) roomSet.add(r[5]);
