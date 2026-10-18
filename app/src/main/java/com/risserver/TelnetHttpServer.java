@@ -429,13 +429,42 @@ public class TelnetHttpServer {
         if (group == 0x0010 && elem == 0x0040) return "CS";
         if (group == 0x0008 && elem == 0x0050) return "SH";
         if (group == 0x0008 && elem == 0x0020) return "DA";
+        if (group == 0x0008 && elem == 0x0030) return "TM";
         if (group == 0x0020 && elem == 0x000D) return "UI";
+        if (group == 0x0020 && elem == 0x000E) return "UI";
+        if (group == 0x0020 && elem == 0x0010) return "SH";
         return "LO";
     }
 
-    private void injectTagMem(ByteArrayOutputStream fout, EditRule rule, boolean isExplicit) throws IOException {
-        fout.write(rule.group & 0xFF); fout.write((rule.group >> 8) & 0xFF);
-        fout.write(rule.elem & 0xFF); fout.write((rule.elem >> 8) & 0xFF);
+    // Byte-stream helper functions for memory-safe I/O on Android 2.3
+    private int readUShort(InputStream in) throws IOException {
+        int ch1 = in.read();
+        int ch2 = in.read();
+        if (ch1 < 0 || ch2 < 0) return -1;
+        return (ch2 << 8) | ch1;
+    }
+
+    private long readUInt(InputStream in) throws IOException {
+        int b1 = in.read(), b2 = in.read(), b3 = in.read(), b4 = in.read();
+        if (b1 < 0 || b2 < 0 || b3 < 0 || b4 < 0) return -1;
+        return (((long)b4 << 24) | (b3 << 16) | (b2 << 8) | b1) & 0xFFFFFFFFL;
+    }
+
+    private void writeUShort(OutputStream out, int v) throws IOException {
+        out.write(v & 0xFF);
+        out.write((v >> 8) & 0xFF);
+    }
+
+    private void writeUInt(OutputStream out, long v) throws IOException {
+        out.write((int)(v & 0xFF));
+        out.write((int)((v >> 8) & 0xFF));
+        out.write((int)((v >> 16) & 0xFF));
+        out.write((int)((v >> 24) & 0xFF));
+    }
+
+    private void injectTagStream(OutputStream fout, EditRule rule, boolean isExplicit) throws IOException {
+        writeUShort(fout, rule.group);
+        writeUShort(fout, rule.elem);
         
         int newLen = rule.newVal.length;
         boolean needsPad = (newLen % 2 != 0);
@@ -447,22 +476,21 @@ public class TelnetHttpServer {
             fout.write(vr.getBytes(Charset.forName("US-ASCII")));
             if (vr.equals("OB") || vr.equals("OW") || vr.equals("OF") || vr.equals("SQ") ||
                 vr.equals("UT") || vr.equals("UN") || vr.equals("UR") || vr.equals("UC")) {
-                fout.write(0); fout.write(0);
-                fout.write(newLen & 0xFF); fout.write((newLen >> 8) & 0xFF); 
-                fout.write((newLen >> 16) & 0xFF); fout.write((newLen >> 24) & 0xFF);
+                writeUShort(fout, 0);
+                writeUInt(fout, newLen);
             } else {
-                fout.write(newLen & 0xFF); fout.write((newLen >> 8) & 0xFF);
+                writeUShort(fout, newLen);
             }
         } else {
-            fout.write(newLen & 0xFF); fout.write((newLen >> 8) & 0xFF); 
-            fout.write((newLen >> 16) & 0xFF); fout.write((newLen >> 24) & 0xFF);
+            writeUInt(fout, newLen);
         }
         
         fout.write(rule.newVal);
         if (needsPad) fout.write(vr.equals("UI") ? 0x00 : 0x20);
     }
 
-    private byte[] applyDicomEdits(byte[] inputBytes, String rulesStr, String delim) {
+    // Direct Disk-to-Disk implementation specifically for Android 2.3 memory limitations
+    private boolean applyDicomEditsFile(File inFile, File outFile, String rulesStr, String delim) {
         List<EditRule> rules = new ArrayList<EditRule>();
         String[] ruleTokens = rulesStr.split(java.util.regex.Pattern.quote(delim));
         
@@ -496,15 +524,22 @@ public class TelnetHttpServer {
         }
         java.util.Collections.sort(rules);
 
-        java.io.ByteArrayInputStream fin = null;
-        ByteArrayOutputStream fout = null;
+        java.io.BufferedInputStream fin = null;
+        java.io.BufferedOutputStream fout = null;
         try {
-            fin = new java.io.ByteArrayInputStream(inputBytes);
-            fout = new ByteArrayOutputStream();
+            fin = new java.io.BufferedInputStream(new java.io.FileInputStream(inFile));
+            fout = new java.io.BufferedOutputStream(new java.io.FileOutputStream(outFile));
             
             byte[] header = new byte[132];
-            if (fin.read(header) != 132 || !new String(header, 128, 4, Charset.forName("US-ASCII")).equals("DICM")) {
-                return null; // Not a valid DICOM file
+            int readBytes = 0;
+            while (readBytes < 132) {
+                int r = fin.read(header, readBytes, 132 - readBytes);
+                if (r == -1) return false;
+                readBytes += r;
+            }
+
+            if (!new String(header, 128, 4, Charset.forName("US-ASCII")).equals("DICM")) {
+                return false; 
             }
             fout.write(header);
 
@@ -512,13 +547,11 @@ public class TelnetHttpServer {
             boolean isExplicit = true;
             boolean tsExplicit = true;
 
-            while (fin.available() > 0) {
-                int ch1 = fin.read(), ch2 = fin.read();
-                if (ch1 < 0 || ch2 < 0) break;
-                int group = (ch2 << 8) | ch1;
-                
-                ch1 = fin.read(); ch2 = fin.read();
-                int elem = (ch2 << 8) | ch1;
+            while (true) {
+                int group = readUShort(fin);
+                if (group == -1) break;
+                int elem = readUShort(fin);
+                if (elem == -1) break;
 
                 if (inMeta && group > 0x0002) {
                     inMeta = false;
@@ -530,7 +563,7 @@ public class TelnetHttpServer {
                 if (!isSqItem) {
                     for (EditRule r : rules) {
                         if (!r.applied && (r.group < group || (r.group == group && r.elem < elem))) {
-                            injectTagMem(fout, r, r.group <= 0x0002 ? tsExplicit : isExplicit);
+                            injectTagStream(fout, r, r.group <= 0x0002 ? tsExplicit : isExplicit);
                             r.applied = true;
                         }
                     }
@@ -542,23 +575,26 @@ public class TelnetHttpServer {
 
                 if (isExplicit && !isSqItem) {
                     byte[] vrBytes = new byte[2];
-                    fin.read(vrBytes);
+                    if (fin.read(vrBytes) != 2) break;
                     vrStr = new String(vrBytes, Charset.forName("US-ASCII"));
 
                     if (vrStr.equals("OB") || vrStr.equals("OW") || vrStr.equals("OF") || vrStr.equals("SQ") ||
                         vrStr.equals("UT") || vrStr.equals("UN") || vrStr.equals("UR") || vrStr.equals("UC")) {
                         fin.skip(2); // reserved
-                        int b1 = fin.read(), b2 = fin.read(), b3 = fin.read(), b4 = fin.read();
-                        length = (((long)b4 << 24) | (b3 << 16) | (b2 << 8) | b1) & 0xFFFFFFFFL;
+                        length = readUInt(fin);
                         is32bitLen = true;
                     } else {
-                        int b1 = fin.read(), b2 = fin.read();
-                        length = (b2 << 8) | b1;
+                        length = readUShort(fin);
                     }
                 } else {
-                    int b1 = fin.read(), b2 = fin.read(), b3 = fin.read(), b4 = fin.read();
-                    length = (((long)b4 << 24) | (b3 << 16) | (b2 << 8) | b1) & 0xFFFFFFFFL;
+                    length = readUInt(fin);
                     is32bitLen = true;
+                }
+
+                // Strip Group Length Tags to prevent viewer corruption if our tag-adding shifts lengths
+                if (group > 0x0002 && elem == 0x0000) {
+                    if (length > 0 && length != 0xFFFFFFFFL) fin.skip(length);
+                    continue;
                 }
 
                 EditRule matchedRule = null;
@@ -568,8 +604,8 @@ public class TelnetHttpServer {
                     }
                 }
 
-                fout.write(group & 0xFF); fout.write((group >> 8) & 0xFF);
-                fout.write(elem & 0xFF); fout.write((elem >> 8) & 0xFF);
+                writeUShort(fout, group);
+                writeUShort(fout, elem);
 
                 if (matchedRule != null && !isSqItem) {
                     matchedRule.applied = true;
@@ -580,15 +616,13 @@ public class TelnetHttpServer {
                     if (isExplicit) {
                         fout.write(vrStr.getBytes(Charset.forName("US-ASCII")));
                         if (is32bitLen) {
-                            fout.write(0); fout.write(0);
-                            fout.write(newLen & 0xFF); fout.write((newLen >> 8) & 0xFF); 
-                            fout.write((newLen >> 16) & 0xFF); fout.write((newLen >> 24) & 0xFF);
+                            writeUShort(fout, 0);
+                            writeUInt(fout, newLen);
                         } else {
-                            fout.write(newLen & 0xFF); fout.write((newLen >> 8) & 0xFF);
+                            writeUShort(fout, newLen);
                         }
                     } else {
-                        fout.write(newLen & 0xFF); fout.write((newLen >> 8) & 0xFF); 
-                        fout.write((newLen >> 16) & 0xFF); fout.write((newLen >> 24) & 0xFF);
+                        writeUInt(fout, newLen);
                     }
 
                     fout.write(matchedRule.newVal);
@@ -600,21 +634,19 @@ public class TelnetHttpServer {
                     if (isExplicit && !isSqItem) {
                         fout.write(vrStr.getBytes(Charset.forName("US-ASCII")));
                         if (is32bitLen) {
-                            fout.write(0); fout.write(0);
-                            fout.write((int)(length & 0xFF)); fout.write((int)((length >> 8) & 0xFF)); 
-                            fout.write((int)((length >> 16) & 0xFF)); fout.write((int)((length >> 24) & 0xFF));
+                            writeUShort(fout, 0);
+                            writeUInt(fout, length);
                         } else {
-                            fout.write((int)(length & 0xFF)); fout.write((int)((length >> 8) & 0xFF));
+                            writeUShort(fout, (int)length);
                         }
                     } else {
-                        fout.write((int)(length & 0xFF)); fout.write((int)((length >> 8) & 0xFF)); 
-                        fout.write((int)((length >> 16) & 0xFF)); fout.write((int)((length >> 24) & 0xFF));
+                        writeUInt(fout, length);
                     }
 
                     if (group == 0x0002 && elem == 0x0010 && length > 0) {
                         byte[] tsBytes = new byte[(int) length];
-                        fin.read(tsBytes);
-                        fout.write(tsBytes);
+                        int r = fin.read(tsBytes);
+                        if (r > 0) fout.write(tsBytes, 0, r);
                         String ts = new String(tsBytes, Charset.forName("US-ASCII"));
                         if (ts.startsWith("1.2.840.10008.1.2.1")) tsExplicit = true;
                         else if (ts.startsWith("1.2.840.10008.1.2")) tsExplicit = false;
@@ -634,13 +666,13 @@ public class TelnetHttpServer {
 
             for (EditRule r : rules) {
                 if (!r.applied) {
-                    injectTagMem(fout, r, r.group <= 0x0002 ? tsExplicit : isExplicit);
+                    injectTagStream(fout, r, r.group <= 0x0002 ? tsExplicit : isExplicit);
                     r.applied = true;
                 }
             }
-            return fout.toByteArray();
+            return true;
         } catch (IOException e) {
-            return null;
+            return false;
         } finally {
             if (fin != null) try { fin.close(); } catch (Exception e) {}
             if (fout != null) try { fout.close(); } catch (Exception e) {}
@@ -936,7 +968,6 @@ public class TelnetHttpServer {
 
                     if (f != null && f.exists() && acc != null && !acc.isEmpty()) {
                         try {
-                            byte[] fileBytes = readAllBytes(f);
                             String pName = "", pId = "", dob = "";
                             for (String row : store.getCsvRowsSnapshot()) {
                                 String[] vals = RisDataStore.parseCsvLineToEntry(row);
@@ -953,15 +984,12 @@ public class TelnetHttpServer {
                                            "0x0010,0x0020=" + pId + "`" +
                                            "0x0010,0x0030=" + dob;
 
-                            byte[] patchedBytes = applyDicomEdits(fileBytes, rules, "`");
-                            if (patchedBytes != null) {
-                                java.io.FileOutputStream fos = null;
-                                try {
-                                    fos = new java.io.FileOutputStream(f);
-                                    fos.write(patchedBytes);
-                                } finally {
-                                    if (fos != null) try { fos.close(); } catch (Exception e) {}
-                                }
+                            File tempOut = new File(f.getParent(), "temp_" + f.getName());
+                            if (applyDicomEditsFile(f, tempOut, rules, "`")) {
+                                f.delete();
+                                tempOut.renameTo(f);
+                            } else {
+                                tempOut.delete();
                             }
                         } catch (Exception ignored) {}
                     }
@@ -1178,8 +1206,11 @@ public class TelnetHttpServer {
             } else {
                 String acc = entry[8];
                 List<RisDataStore.StoredImageInfo> images = store.getStoredImagesForAccession(acc);
+                
+                sb.append("<td style='white-space:nowrap;'>");
+                
+                // Show existing images if any
                 if (!images.isEmpty()) {
-                    sb.append("<td style='white-space:nowrap;'>");
                     for (int imgIdx = 0; imgIdx < images.size(); imgIdx++) {
                         RisDataStore.StoredImageInfo img = images.get(imgIdx);
                         sb.append("<div style='margin-bottom:4px; font-size:12px; display:flex; align-items:center; gap:5px;'>")
@@ -1190,12 +1221,14 @@ public class TelnetHttpServer {
                           .append("<label style='cursor:pointer; color:#f44336; font-weight:bold; text-decoration:underline;'>Replace<input type='file' name='file' accept='.dcm' style='display:none;' onchange='this.form.submit()'></label>")
                           .append("</form></div>");
                     }
-                    sb.append("</td>");
                 } else {
-                    sb.append("<td>0 - <form method='POST' action='/upload_new?acc=").append(acc).append("' enctype='multipart/form-data' style='margin:0; padding:0; display:inline-block; margin-left:8px;'>")
-                      .append("<label style='cursor:pointer; color:#2196F3; font-weight:bold; text-decoration:underline;'>Upload<input type='file' name='file' accept='.dcm' style='display:none;' onchange='this.form.submit()'></label>")
-                      .append("</form></td>");
+                    sb.append("<span style='margin-right:8px; font-size:14px;'>0 Images - </span> ");
                 }
+                
+                // Unconditionally append the Upload New button for this accession
+                sb.append("<form method='POST' action='/upload_new?acc=").append(acc).append("' enctype='multipart/form-data' style='margin:0; padding:0; display:inline-block; margin-top:2px;'>")
+                  .append("<label style='cursor:pointer; color:#4CAF50; font-weight:bold; text-decoration:underline;'>+ Upload Image<input type='file' name='file' accept='.dcm' style='display:none;' onchange='this.form.submit()'></label>")
+                  .append("</form></td>");
             }
             
             sb.append("</tr>");
