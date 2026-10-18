@@ -890,27 +890,42 @@ public class TelnetHttpServer {private final RisDataStore store;
                     byte[] fileData = extractMultipartBinaryFile(fullReqBytes, headerEnd + 4, boundary, "file");
                     if (fileData != null && fileData.length > 0) {
                         if (isNew) {
-                            File f = store.allocateImageFile();
-                            String tempSop = f.getName().replace(".dcm", "");
-                            
-                            java.io.FileOutputStream fos = null;
-                            try {
-                                fos = new java.io.FileOutputStream(f);
-                                fos.write(fileData);
-                            } finally {
-                                if (fos != null) try { fos.close(); } catch (Exception e) {}
-                            }
-                            
-                            String askHtml = HTML_START + "<h2>File Uploaded Successfully</h2>" +
-                                "<div class='query-box'>" +
-                                "<p>Would you like to write the Worklist patient data (Accession, Name, DOB, Patient ID) into this file's header, erasing existing values?</p>" +
-                                "<form method='POST' action='/patch?newSop=" + tempSop + "&acc=" + identifier + "'>" +
-                                "<button type='submit' class='top-btn bg-green'>Yes, Write Data</button> " +
-                                "<a href='/' class='top-btn bg-blue' style='text-decoration:none;'>No, Keep as is</a>" +
-                                "</form></div>" + HTML_END;
-                            sendHttpResponse(out, "200 OK", "text/html; charset=utf-8", askHtml);
-                            return;
-                        } else {
+    File f = store.allocateImageFile();
+    String tempSop = f.getName().replace(".dcm", "");
+    
+    java.io.FileOutputStream fos = null;
+    try {
+        fos = new java.io.FileOutputStream(f);
+        fos.write(fileData);
+    } finally {
+        if (fos != null) try { fos.close(); } catch (Exception e) {}
+    }
+    
+    // Safely record the image metadata into the tracking database
+    String pName = "", pId = "", stUid = "";
+    for (String row : store.getCsvRowsSnapshot()) {
+        String[] vals = RisDataStore.parseCsvLineToEntry(row);
+        if (vals.length > 8 && vals[8].equals(identifier)) {
+            pName = vals[0];
+            pId = vals[1];
+            stUid = vals.length > 26 ? vals[26] : "";
+            break;
+        }
+    }
+    store.recordStoredImage(identifier, pName, pId, stUid, tempSop,
+            f.getParentFile().getName(), f.getName(), "OT", f.length(),
+            new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US).format(new java.util.Date()));
+    
+    String askHtml = HTML_START + "<h2>File Uploaded Successfully</h2>" +
+        "<div class='query-box'>" +
+        "<p>Would you like to write the Worklist patient data (Accession, Name, DOB, Patient ID) into this file's header, erasing existing values?</p>" +
+        "<form method='POST' action='/patch?newSop=" + tempSop + "&acc=" + identifier + "'>" +
+        "<button type='submit' class='top-btn bg-green'>Yes, Write Data</button> " +
+        "<a href='/' class='top-btn bg-blue' style='text-decoration:none;'>No, Keep as is</a>" +
+        "</form></div>" + HTML_END;
+    sendHttpResponse(out, "200 OK", "text/html; charset=utf-8", askHtml);
+    return;
+} else {
                             File f = store.getImageFilePath(identifier);
                             if (f != null) {
                                 java.io.FileOutputStream fos = null;
@@ -948,16 +963,8 @@ public class TelnetHttpServer {private final RisDataStore store;
 
                     File f = null;
                     if (newSop != null) {
-                        f = new File(new File(store.getStorageRoot(), store.storageFolder), newSop + ".dcm");
-                        java.io.FileWriter fw = null;
-                        try {
-                            fw = new java.io.FileWriter(new File(store.dataDir, "c-store.csv"), true);
-                            fw.write("\r\n" + acc + "," + newSop + ",OT,");
-                        } catch (Exception ignored) {
-                        } finally {
-                            if (fw != null) try { fw.close(); } catch (Exception e) {}
-                        }
-                    } else if (sop != null) {
+    f = new File(new File(store.getStorageRoot(), store.storageFolder), newSop + ".dcm");
+} else if (sop != null) {
                         f = store.getImageFilePath(sop);
                         for (RisDataStore.StoredImageInfo info : store.getAllStoredImages()) {
                             if (info.sopInstanceUID.equals(sop)) {
@@ -1215,7 +1222,7 @@ private String escapeJs(String str) {
                         RisDataStore.StoredImageInfo img = images.get(imgIdx);
                         sb.append("<div style='margin-bottom:4px; font-size:12px; display:flex; align-items:center; gap:5px;'>")
                           .append("<span>").append(img.modality).append(" #").append(imgIdx + 1).append(":</span> ")
-                          .append("<a href='/download?sop=").append(img.sopInstanceUID).append("' style='color:#2196F3;text-decoration:none;font-weight:bold;'>DL .dcm</a> | ")
+                          .append("<a href='/download?sop=").append(img.sopInstanceUID).append("' style='color:#2196F3;text-decoration:none;font-weight:bold;'>").append(img.filename).append("</a> | ")
                           .append("<a href='/header?sop=").append(img.sopInstanceUID).append("' style='color:#9c27b0;text-decoration:none;font-weight:bold;'>Header</a> | ")
                           .append("<form method='POST' action='/replace?sop=").append(img.sopInstanceUID).append("' enctype='multipart/form-data' style='margin:0; padding:0; display:inline-block;'>")
                           .append("<label style='cursor:pointer; color:#f44336; font-weight:bold; text-decoration:none;'>Replace<input type='file' name='file' accept='.dcm' style='display:none;' onchange='this.form.submit()'></label>")
