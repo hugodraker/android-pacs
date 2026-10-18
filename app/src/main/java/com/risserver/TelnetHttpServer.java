@@ -27,6 +27,7 @@ import java.net.SocketTimeoutException;
 import java.net.URLDecoder;
 import java.nio.charset.Charset;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -36,6 +37,28 @@ public class TelnetHttpServer {
     private ServerSocket telnetServerSocket;
     private ServerSocket httpServerSocket;
     private volatile boolean running = false;
+
+    private static class EditRule implements Comparable<EditRule> {
+        int group;
+        int elem;
+        String val;
+        String vr;
+        boolean applied;
+
+        EditRule(int g, int e, String v, String vr) {
+            this.group = g;
+            this.elem = e;
+            this.val = v;
+            this.vr = vr;
+            this.applied = false;
+        }
+
+        @Override
+        public int compareTo(EditRule o) {
+            if (this.group != o.group) return this.group - o.group;
+            return this.elem - o.elem;
+        }
+    }
 
     private static final String HTML_START =
             "<html><head><title>RIS Worklist Manager</title><meta name='viewport' content='width=device-width, initial-scale=1'><style>" +
@@ -408,11 +431,47 @@ public class TelnetHttpServer {
         return "";
     }
 
+    private void injectTag(java.io.FileOutputStream fout, EditRule rule, boolean isExplicit) throws IOException {
+        fout.write(new byte[]{(byte)(rule.group & 0xFF), (byte)((rule.group >> 8) & 0xFF), (byte)(rule.elem & 0xFF), (byte)((rule.elem >> 8) & 0xFF)});
+        
+        byte[] valBytes = rule.val.getBytes(Charset.forName("UTF-8"));
+        int newLen = valBytes.length;
+        boolean needsPad = (newLen % 2 != 0);
+        if (needsPad) newLen++;
+
+        if (isExplicit) {
+            fout.write(rule.vr.getBytes("US-ASCII"));
+            if (rule.vr.equals("OB") || rule.vr.equals("OW") || rule.vr.equals("OF") ||
+                rule.vr.equals("SQ") || rule.vr.equals("UT") || rule.vr.equals("UN") ||
+                rule.vr.equals("UR") || rule.vr.equals("UC")) {
+                fout.write(new byte[]{0, 0});
+                fout.write(new byte[]{(byte)(newLen & 0xFF), (byte)((newLen >> 8) & 0xFF), (byte)((newLen >> 16) & 0xFF), (byte)((newLen >> 24) & 0xFF)});
+            } else {
+                fout.write(new byte[]{(byte)(newLen & 0xFF), (byte)((newLen >> 8) & 0xFF)});
+            }
+        } else {
+            fout.write(new byte[]{(byte)(newLen & 0xFF), (byte)((newLen >> 8) & 0xFF), (byte)((newLen >> 16) & 0xFF), (byte)((newLen >> 24) & 0xFF)});
+        }
+        
+        fout.write(valBytes);
+        if (needsPad) {
+            fout.write(rule.vr.equals("UI") ? 0x00 : 0x20);
+        }
+    }
+
     private boolean patchDicomFile(File file, String pName, String pId, String dob, String acc) {
         File tempFile = new File(file.getAbsolutePath() + ".tmp");
         java.io.FileInputStream fin = null;
         java.io.FileOutputStream fout = null;
         boolean success = false;
+        
+        List<EditRule> rules = new ArrayList<EditRule>();
+        if (acc != null && !acc.isEmpty()) rules.add(new EditRule(0x0008, 0x0050, acc, "SH"));
+        if (pName != null && !pName.isEmpty()) rules.add(new EditRule(0x0010, 0x0010, pName, "PN"));
+        if (pId != null && !pId.isEmpty()) rules.add(new EditRule(0x0010, 0x0020, pId, "LO"));
+        if (dob != null && !dob.isEmpty()) rules.add(new EditRule(0x0010, 0x0030, dob, "DA"));
+        Collections.sort(rules);
+
         try {
             fin = new java.io.FileInputStream(file);
             fout = new java.io.FileOutputStream(tempFile);
@@ -439,6 +498,19 @@ public class TelnetHttpServer {
                 }
 
                 boolean isSqItem = (group == 0xFFFE);
+
+                if (!isSqItem) {
+                    for (EditRule r : rules) {
+                        if (!r.applied) {
+                            if (r.group < group || (r.group == group && r.elem < elem)) {
+                                boolean useExplicit = (r.group <= 0x0002) ? tsExplicit : isExplicit;
+                                injectTag(fout, r, useExplicit);
+                                r.applied = true;
+                            }
+                        }
+                    }
+                }
+
                 String vr = "";
                 long length = 0;
                 boolean is32BitLen = false;
@@ -468,18 +540,21 @@ public class TelnetHttpServer {
                     is32BitLen = true;
                 }
 
-                String newVal = null;
+                EditRule matchedRule = null;
                 if (!isSqItem) {
-                    if (group == 0x0010 && elem == 0x0010 && pName != null) newVal = pName;
-                    else if (group == 0x0010 && elem == 0x0020 && pId != null) newVal = pId;
-                    else if (group == 0x0010 && elem == 0x0030 && dob != null) newVal = dob;
-                    else if (group == 0x0008 && elem == 0x0050 && acc != null) newVal = acc;
+                    for (EditRule r : rules) {
+                        if (r.group == group && r.elem == elem) {
+                            matchedRule = r;
+                            break;
+                        }
+                    }
                 }
 
                 fout.write(tagBuf);
 
-                if (newVal != null) {
-                    byte[] valBytes = newVal.getBytes(Charset.forName("UTF-8"));
+                if (matchedRule != null) {
+                    matchedRule.applied = true;
+                    byte[] valBytes = matchedRule.val.getBytes(Charset.forName("UTF-8"));
                     long newLen = valBytes.length;
                     boolean needsPad = (newLen % 2 != 0);
                     if (needsPad) newLen++;
@@ -548,6 +623,15 @@ public class TelnetHttpServer {
                     }
                 }
             }
+
+            for (EditRule r : rules) {
+                if (!r.applied) {
+                    boolean useExplicit = (r.group <= 0x0002) ? tsExplicit : isExplicit;
+                    injectTag(fout, r, useExplicit);
+                    r.applied = true;
+                }
+            }
+
             success = true;
         } catch (Exception e) {
             e.printStackTrace();
@@ -1093,7 +1177,7 @@ public class TelnetHttpServer {
         sb.append("<datalist id='stNameList'>");
         sb.append("<datalist id='modList'>");
         if (roomsFile.exists()) {
-            List<String[]> rList = new ArrayList<>();
+            List<String[]> rList = new ArrayList<String[]>();
             BufferedReader br = null;
             try {
                 br = new BufferedReader(new FileReader(roomsFile));
@@ -1115,9 +1199,9 @@ public class TelnetHttpServer {
             }
 
             sb.append("<script>var rData = [");
-            Set<String> roomSet = new HashSet<>();
-            Set<String> stnSet = new HashSet<>();
-            Set<String> modSet = new HashSet<>();
+            Set<String> roomSet = new HashSet<String>();
+            Set<String> stnSet = new HashSet<String>();
+            Set<String> modSet = new HashSet<String>();
             
             for (String[] r : rList) {
                 if (!r[5].isEmpty()) roomSet.add(r[5]);
