@@ -41,4 +41,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: RIS_Server-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: app/build/outputs/apk/debug/ris-pacs-app-debug-2.3.apk
